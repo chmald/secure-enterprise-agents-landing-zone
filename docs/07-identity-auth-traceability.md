@@ -29,6 +29,23 @@ This is the central page of the demo. It answers the question enterprise securit
 
 ## The identity model
 
+### Browser console is a separate caller, not OBO
+
+The new console has a **separate single-tenant Entra app**. ACA Easy Auth requires sign-in and allowlists the deploying human's object ID; FastAPI independently verifies the platform-injected principal ID and rejects conflicting owner/tenant claims when supplied. This controls **browser access**, not delegation. Downstream requests use the **console backend managed identity**: Azure AI User (Foundry project), Cognitive Services User (Foundry account; APIM token audience `https://cognitiveservices.azure.com`), Log Analytics Reader (workspace), and Key Vault Secrets User (vault). On the tier, direct checks use a runtime key, not an Entra caller principal.
+
+**Platform header contract:** [Container Apps authentication](https://learn.microsoft.com/azure/container-apps/authentication#access-user-claims-in-application-code) injects `X-MS-CLIENT-PRINCIPAL-ID` after authentication and prevents external callers from setting trusted identity headers. The console runs behind that mandatory Easy Auth boundary; it does not authenticate raw client headers on a standalone public server. If the full Base64 claims header is present, malformed or conflicting claims still fail closed. Tenant validation is enforced by the configured single-tenant Easy Auth issuer, not by assuming ACA always supplies a `tid` header.
+
+Entra provider identifiers `aad` and `azureActiveDirectory` refer to the same configured provider. The full principal's `auth_typ` describes the claims identity's authentication type (which can be a federation authentication type); it is not a provider identifier. Access decisions use the platform-validated deployer ID and any supplied owner/tenant claims, not an assumed `auth_typ == "aad"` string.
+
+Browser POSTs pass two CSRF checks: Easy Auth's session-cookie check and the backend's exact-origin plus custom-header check. The auth configuration explicitly lists only the console's HTTPS URL in `login.allowedExternalRedirectUrls`, so the platform recognizes the browser origin before forwarding the request. No other origin or wildcard CORS is enabled, and the Entra tenant/deployer allowlist still applies.
+
+The console does not forward the browser's credentials, perform OBO, or impersonate a hosted agent. Agent-to-gateway calls still use the deployed agent identity/configuration below. Header trace IDs are advisory; inspect logs to verify propagation. The OBO sample remains manual/unavailable unless explicitly deployed. See the [limited console live checks and remaining acceptance work](./04-testing.md#live-follow-up-2026-10-16); the earlier identity evidence does not validate this new caller. App-secret rotation and manual Entra cleanup after `azd down`: [03](./03-deployment.md#console-secret-expiry-rotation-and-cleanup).
+
+| Console direct-call path | Credential used | Key Vault dependency |
+|---|---|---|
+| APIM Standard/Premium v2 | Short-lived Entra access token from the console managed identity, audience `https://cognitiveservices.azure.com`; APIM validates the bearer token. | No AI Gateway runtime-key read. APIM uses its own managed identity for the Foundry model backend. |
+| AI Gateway tier | Gateway-scoped runtime key sent server-side in `api-key`. | Default `keyvault` mode reads the secret with the console identity. Explicit demo-only `env` mode reads `AIGW_RUNTIME_KEY` from an ACA secret reference instead. The key remains in secret-bearing local azd state too. |
+
 [![Identity and runtime-key flow](./assets/identity-token-flow.png)](./assets/identity-token-flow.png)
 
 Foundry integrates with **Microsoft Entra Agent ID**. A hosted agent is not just a container; it has an identity that other systems can authorize and audit. Source: [Agent identity concepts in Foundry](https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/agent-identity).
@@ -308,4 +325,4 @@ Settle these before scale. Each card shows the question, the options, and how th
 
 Next: [08 - Tools, APIM and MCP topology](./08-tools-apim-mcp-topology.md) →
 
-*Last updated: 2026-10-02*
+*Last updated: 2026-10-15*

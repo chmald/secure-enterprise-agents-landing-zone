@@ -21,6 +21,17 @@
 
 Single-page orchestrator for standing up the **Foundry Hosted Agents + AI Gateway Landing Zone** from an empty Azure subscription. Use it for checkpoints before opening the deeper runbooks. It is written for the person who will actually run the build - typically a platform engineer or developer - and every part ends with a checkpoint you can tick off.
 
+> [!IMPORTANT]
+> **Browser path: deployed with limited live checks, not a completed browser acceptance matrix.** See the [2026-10-16 follow-up](./04-testing.md#live-follow-up-2026-10-16). One-time provisioning still uses the CLI; presenting S1-S5 does not. `azd up` includes `demo-console` (remote build, repository-root Docker context). For an existing environment run `azd provision`, then `azd deploy records-api demo-console` so the REST collection-routing fix ships too. Open `DEMO_CONSOLE_URL` as the deploying human. Earlier badges/evidence describe the script-driven deployment only.
+
+### Browser reproduction checkpoints
+
+1. Complete Part A with a human Azure CLI login in the intended tenant/subscription. Before setup operations, `preprovision` verifies that context, resolves `AZURE_PRINCIPAL_ID` from the signed-in user, and ensures a separate single-tenant console Entra app and credential. App/credential creation permissions are required.
+2. Provision with the existing hooks ([03 - Console setup](./03-deployment.md#demo-console-provisioning-and-sign-in)). `DEMO_CONSOLE_CLIENT_ID`, `DEMO_CONSOLE_ALLOWED_USER_ID`, and `DEMO_CONSOLE_CLIENT_SECRET` must be populated by setup before deployment; blank defaults fail closed. Do not print or commit secret-bearing azd state.
+3. Check outputs `DEMO_CONSOLE_URL` and `DEMO_CONSOLE_APP_NAME`; sign in as the deployer. Easy Auth is tenant-only and deployer-allowlisted; the backend verifies the platform-injected principal ID and rejects conflicting owner/tenant claims when supplied. With `NETWORK_ISOLATION=true`, the console is in the internal ACA environment: use a VNet/VPN-connected browser and working private DNS.
+4. Follow [browser S1-S5](./11-demo-walkthrough.md#browser-console-s1-s5). Confirm **every** agent submission (tools can mutate), direct write and bounded throttle burst separately. Inspect raw details and statuses; no 429/empty logs means `not_run`, not success.
+5. Keep agent routing separate from direct checks: the dropdown does not change deployed `HOSTED_DEFAULT_GATEWAY`. The displayed hosted gateway is a **provisioning snapshot**, not live discovery; after changing `AGENT_DEFAULT_GATEWAY`, run `azd provision` to sync console configuration as well as redeploying agents. OBO, optional ACA agent comparison, and network isolation verification remain manual/unavailable unless explicitly deployed/verified. The console never runs CLI commands or scripts inside the app.
+
 ## At a glance
 
 | | Item | Value |
@@ -28,7 +39,7 @@ Single-page orchestrator for standing up the **Foundry Hosted Agents + AI Gatewa
 | <img src="./assets/icons/subscription.svg" width="24" alt=""> | **Starting point** | Empty subscription + tenant where you can register an Entra app. |
 | <img src="./assets/icons/azure-devops.svg" width="24" alt=""> | **Tooling** | Azure CLI, Azure Developer CLI (`azd`) + `azure.ai.agents` extension, PowerShell 7, Python 3.11+. |
 | <img src="./assets/icons/api-management.svg" width="24" alt=""> | **Default path** | `AI_GATEWAY_MODE=both` for validation; `AGENT_DEFAULT_GATEWAY=apimv2` first (the agents receive it as `HOSTED_DEFAULT_GATEWAY`). |
-| <img src="./assets/icons/foundry-agent-service.svg" width="24" alt=""> | **End state** | Two hosted agents + two tool backends behind two gateways, with audit queries returning rows. |
+| <img src="./assets/icons/foundry-agent-service.svg" width="24" alt=""> | **End state** | Two hosted agents + two tool backends behind configured gateways, plus a deployer-only browser console; audit rows must be verified after ingestion. |
 | <img src="./assets/icons/cost-management.svg" width="24" alt=""> | **Time** | 4-6 hours first build; 90-150 minutes repeat build. |
 
 > [!IMPORTANT]
@@ -50,7 +61,11 @@ Single-page orchestrator for standing up the **Foundry Hosted Agents + AI Gatewa
 <sub>Editable source: [`assets/foundry-hosted-agents-ai-gateway-landing-zone-architecture.drawio`](./assets/foundry-hosted-agents-ai-gateway-landing-zone-architecture.drawio) - regenerate with `python scripts/export_diagrams.py docs/assets`.</sub>
 
 ```text
-Clients (walkthrough script, OBO sample, validate_gateway.py)
+Browser (tenant-only Entra Easy Auth + backend deployer principal-ID validation)
+   │
+   ▼
+ca-demo-console (existing ACA environment; managed identity)
+   ├──────────────► Direct gateway checks + bounded saved KQL (01-11)
    │
    ▼
 Foundry hosted agents:  agent-maf   agent-langgraph      (official hosts, responses 2.0.0, port 8088)
@@ -61,6 +76,8 @@ Foundry hosted agents:  agent-maf   agent-langgraph      (official hosts, respon
                           │
 Key Vault (runtime key) ──┘        Application Insights + Log Analytics + workbook + KQL
 ```
+
+The console is not an OBO client. Direct APIM checks identify its managed identity; the AI Gateway tier checks a runtime key. Existing scripts and the OBO sample remain separate developer/manual paths below.
 
 ## Parts A-F
 
@@ -210,4 +227,4 @@ Next: [01 - Architecture](./01-architecture.md) →
 
 ---
 
-*Last updated: 2026-10-02*
+*Last updated: 2026-10-15*

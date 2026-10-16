@@ -4,19 +4,108 @@
     {
       "type": 1,
       "content": {
-        "json": "# Hosted agents gateway audit workbook\nCross-system workbook for token usage, MCP tools, denial/throttle events, latency, LLM logs, and trace lookup."
+        "json": "# Hosted agents gateway audit workbook\nStart with the overview charts, then use the evidence sections below. The time range applies to every section; the trace ID filters only **Trace investigation**.\n\nEmpty results are not proof of a passing control. Gateway and hosted-agent tokens are overlapping observations: do not sum them together. **Privacy:** message and tool-content panels contain potentially sensitive data; use approved demo data and workspace RBAC."
       },
       "name": "title"
+    },
+    {
+      "type": 9,
+      "content": {
+        "version": "KqlParameterItem/1.0",
+        "parameters": [
+          {
+            "id": "TimeRange",
+            "version": "KqlParameterItem/1.0",
+            "name": "TimeRange",
+            "label": "Time range (all sections)",
+            "type": 4,
+            "isRequired": true,
+            "value": { "durationMs": 86400000 },
+            "typeSettings": {
+              "selectableValues": [
+                { "durationMs": 3600000 },
+                { "durationMs": 14400000 },
+                { "durationMs": 86400000 },
+                { "durationMs": 604800000 }
+              ],
+              "allowCustom": true
+            }
+          }
+        ],
+        "style": "pills"
+      },
+      "name": "parameters"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## Overview - token usage\n**Selected range: {TimeRange:label} ({TimeRange:start} to {TimeRange:end}); bucket: {TimeRange:grain}.** The left chart compares gateway lanes; the right chart shows hosted-agent **chat** spans separately. Input and output are distinct series. They describe overlapping work, not additional consumption. Empty buckets within an observed series are zero-filled across the selected window; a window with no token observations shows the no-data message, not fabricated series. The trace input below does not filter these charts."
+      },
+      "name": "overview-header"
     },
     {
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "ApiManagementGatewayLlmLog | summarize TotalTokens=sum(TotalTokens) by bin(TimeGenerated, 1h), ModelName | render timechart",
+        "query": "",
+        "visualization": "timechart",
+        "chartSettings": {
+          "xAxis": "TimeGenerated",
+          "yAxis": ["Tokens"],
+          "group": "Series",
+          "showLegend": true,
+          "showMetrics": true
+        },
+        "noDataMessage": "No gateway LLM token telemetry in this time range. Generate a confirmed model request and allow for ingestion delay.",
         "size": 0,
-        "title": "Token usage by model / agent dimension",
+        "title": "Gateway LLM tokens - APIM vs AI Gateway tier",
         "queryType": 0,
-        "resourceType": "microsoft.operationalinsights/workspaces"
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "timeContextFromParameter": "TimeRange"
+      },
+      "customWidth": "50",
+      "name": "gateway-token-trend"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "",
+        "visualization": "timechart",
+        "chartSettings": {
+          "xAxis": "TimeGenerated",
+          "yAxis": ["Tokens"],
+          "group": "Series",
+          "showLegend": true,
+          "showMetrics": true
+        },
+        "noDataMessage": "No hosted-agent chat token telemetry in this time range. Direct gateway calls do not create hosted-agent spans.",
+        "size": 0,
+        "title": "Hosted-agent chat tokens - separate observation layer",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "timeContextFromParameter": "TimeRange"
+      },
+      "customWidth": "50",
+      "name": "agent-token-trend"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## Token usage details\nUse these tables to inspect the source, recorded identity/model, routes and request counts behind the overview. Agent names are not application IDs; a shared tier key does not identify a human or agent principal."
+      },
+      "name": "token-details-header"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "",
+        "size": 0,
+        "title": "02 - Token usage by telemetry source and recorded identity/model",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "timeContextFromParameter": "TimeRange"
       },
       "name": "token-usage"
     },
@@ -24,47 +113,32 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "let TierGenAi = union isfuzzy=true AppDependencies, AppTraces, AppRequests | extend props=todynamic(Properties) | where bag_keys(props) has_any ('gen_ai.request.model','gen_ai.response.model','gen_ai.operation.name','gen_ai.token.type') or tostring(Name) has 'gen_ai' or tostring(Message) has 'gen_ai' | extend Gateway='aigateway-tier', Model=coalesce(tostring(props['gen_ai.request.model']), tostring(props['gen_ai.response.model']), 'verify_after_live_deploy'), Tokens=todouble(coalesce(props['gen_ai.usage.total_tokens'], props['token_count'], 0)); let StandardV2 = ApiManagementGatewayLlmLog | extend Gateway='apim-standard-v2', Model=tostring(ModelName), Tokens=todouble(TotalTokens); union isfuzzy=true TierGenAi, StandardV2 | summarize Tokens=sum(Tokens), Requests=count() by Gateway, Model, bin(TimeGenerated, 1h) | render timechart",
+        "query": "",
         "size": 0,
-        "title": "Standard v2 vs AI Gateway tier token usage",
+        "title": "11 - APIM, AI Gateway tier and hosted-agent observations (not additive)",
         "queryType": 0,
-        "resourceType": "microsoft.operationalinsights/workspaces"
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "timeContextFromParameter": "TimeRange"
       },
       "name": "standard-v2-vs-aigw-tier"
     },
     {
-      "type": 3,
+      "type": 1,
       "content": {
-        "version": "KqlItem/1.0",
-        "query": "ApiManagementGatewayMCPLog | summarize Calls=count() by ToolName, ServerName | order by Calls desc",
-        "size": 0,
-        "title": "Tool calls by server and tool",
-        "queryType": 0,
-        "resourceType": "microsoft.operationalinsights/workspaces"
+        "json": "## Gateway health and tool activity\nLatency, HTTP failures, tool decisions and MCP methods/sessions across the selected time range. Identity and token joins are best-effort evidence, not inferred links."
       },
-      "name": "tool-calls"
+      "name": "activity-header"
     },
     {
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "union isfuzzy=true ApiManagementGatewayLogs, ApiManagementGatewayMCPLog | where ResponseCode in (401,403,429) or Error has_any ('Forbidden','throttl') | summarize Count=count() by bin(TimeGenerated, 15m), Type | render timechart",
+        "query": "union isfuzzy=true (datatable(TimeGenerated:datetime, Gateway:string, Route:string, Duration:real, Status:int)[]), (ApiManagementGatewayLogs | project TimeGenerated, Gateway='apim-v2', Route=ApiId, Duration=todouble(TotalTime), Status=toint(ResponseCode)), (AppRequests | where AppRoleName startswith 'aigw-' | project TimeGenerated, Gateway='aigateway-tier', Route=Name, Duration=DurationMs, Status=toint(ResultCode)) | summarize Requests=count(), P95DurationMs=percentile(Duration, 95), Failures5xx=countif(Status between (500 .. 599)) by bin(TimeGenerated, 15m), Gateway, Route | order by TimeGenerated desc | take 200",
         "size": 0,
-        "title": "Denied and throttled",
+        "title": "Gateway latency (milliseconds) and HTTP 5xx",
         "queryType": 0,
-        "resourceType": "microsoft.operationalinsights/workspaces"
-      },
-      "name": "denied-throttled"
-    },
-    {
-      "type": 3,
-      "content": {
-        "version": "KqlItem/1.0",
-        "query": "ApiManagementGatewayLogs | summarize P95=percentile(DurationMs, 95), Failures=countif(ResponseCode between (500 .. 599)) by bin(TimeGenerated, 15m), ApiId | render timechart",
-        "size": 0,
-        "title": "Gateway latency and 5xx",
-        "queryType": 0,
-        "resourceType": "microsoft.operationalinsights/workspaces"
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "timeContextFromParameter": "TimeRange"
       },
       "name": "latency-5xx"
     },
@@ -72,25 +146,204 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "ApiManagementGatewayLlmLog | project TimeGenerated, CorrelationId, ModelName, PromptTokens, CompletionTokens, TotalTokens, PromptMessages, CompletionMessages | take 25",
+        "query": "",
         "size": 0,
-        "title": "LLM log sample",
+        "title": "01 - Who called which tool: audit and best-effort gateway/token joins",
         "queryType": 0,
-        "resourceType": "microsoft.operationalinsights/workspaces"
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "timeContextFromParameter": "TimeRange"
       },
-      "name": "llm-sample"
+      "name": "who-called-which-tool"
     },
     {
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "let traceId = '{traceId}'; union isfuzzy=true AppRequests, AppDependencies, AppTraces, ApiManagementGatewayLogs, ApiManagementGatewayMCPLog, ApiManagementGatewayLlmLog | where tostring(OperationId) == traceId or tostring(CorrelationId) == traceId or tostring(Properties.trace_id) == traceId | order by TimeGenerated asc",
+        "query": "",
         "size": 0,
-        "title": "End-to-end trace lookup",
+        "title": "05 - MCP methods, tools, servers and sessions",
         "queryType": 0,
-        "resourceType": "microsoft.operationalinsights/workspaces"
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "timeContextFromParameter": "TimeRange"
+      },
+      "name": "tool-calls"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## Security and platform audit\nInspect denials, content-safety signals, identity events and resource changes. Entra and Activity Log exports are opt-in; no rows means no evidence in this range, not a passing control."
+      },
+      "name": "security-header"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "",
+        "size": 0,
+        "title": "03 - Denied and throttled requests",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "timeContextFromParameter": "TimeRange"
+      },
+      "name": "denied-throttled"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "",
+        "size": 0,
+        "title": "09 - Content-safety signals (inspect evidence, not a policy proof)",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "timeContextFromParameter": "TimeRange"
+      },
+      "name": "content-safety"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "",
+        "size": 0,
+        "title": "07 - Entra identity sign-ins and agent audit (requires export)",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "timeContextFromParameter": "TimeRange"
+      },
+      "name": "identity-sign-ins"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "",
+        "size": 0,
+        "title": "08 - Control-plane changes (requires Activity Log export)",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "timeContextFromParameter": "TimeRange"
+      },
+      "name": "control-plane-changes"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "",
+        "size": 0,
+        "title": "10 - Foundry audit and application trace events",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "timeContextFromParameter": "TimeRange"
+      },
+      "name": "foundry-audit"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "union isfuzzy=true (datatable(TimeGenerated:datetime, Source:string, Operation:string, Status:string, ResourceId:string, Detail:string)[]), (AzureDiagnostics | where ResourceProvider in~ ('MICROSOFT.KEYVAULT', 'MICROSOFT.CONTAINERREGISTRY') | project TimeGenerated, Source=ResourceProvider, Operation=OperationName, Status=ResultType, ResourceId, Detail=ResultDescription), (ContainerRegistryLoginEvents | project TimeGenerated, Source='ContainerRegistryLoginEvents', Operation=tostring(column_ifexists('OperationName', '')), Status=tostring(column_ifexists('ResultType', '')), ResourceId=tostring(column_ifexists('_ResourceId', '')), Detail=tostring(column_ifexists('ResultDescription', ''))), (ContainerRegistryRepositoryEvents | project TimeGenerated, Source='ContainerRegistryRepositoryEvents', Operation=tostring(column_ifexists('OperationName', '')), Status=tostring(column_ifexists('ResultType', '')), ResourceId=tostring(column_ifexists('_ResourceId', '')), Detail=tostring(column_ifexists('ResultDescription', ''))) | order by TimeGenerated desc | take 100",
+        "size": 0,
+        "title": "Key Vault and container registry audit events",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "timeContextFromParameter": "TimeRange"
+      },
+      "name": "platform-audit"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## Trace investigation\nThe optional input in this section filters **only** the timeline and hosted-agent content below. Leave it blank for recent hops. The timeline accepts a W3C trace ID or an APIM correlation ID; hosted-agent content matches W3C trace IDs only and can be empty for an APIM correlation ID.\n\nAPIM's `OperationId` is an API operation name, not a W3C trace ID. Gateway rows can link through an actual tool audit record's `gateway_request_id`; absent links remain missing evidence. This input does not filter the overview, audit tables, telemetry coverage or APIM message sample."
+      },
+      "name": "trace-guidance"
+    },
+    {
+      "type": 9,
+      "content": {
+        "version": "KqlParameterItem/1.0",
+        "parameters": [
+          {
+            "id": "traceId",
+            "version": "KqlParameterItem/1.0",
+            "name": "traceId",
+            "label": "Trace / APIM correlation ID (this section only)",
+            "type": 1,
+            "isRequired": false,
+            "value": ""
+          }
+        ],
+        "style": "pills"
+      },
+      "name": "trace-parameters"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "",
+        "size": 0,
+        "title": "04 - Trace / correlation timeline (blank = recent hops)",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "timeContextFromParameter": "TimeRange"
       },
       "name": "trace-lookup"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "union isfuzzy=true (datatable(TimeGenerated:datetime, TraceId:string, AgentName:string, AgentId:string, ModelName:string, InputMessages:string, OutputMessages:string, ToolCallArguments:string, ToolCallResult:string)[]), (AppGenAIContent | project TimeGenerated, TraceId, AgentName, AgentId, ModelName, InputMessages, OutputMessages, ToolCallArguments, ToolCallResult) | where isempty(\"{traceId:escapejson}\") or TraceId == \"{traceId:escapejson}\" | order by TimeGenerated desc | take 50",
+        "size": 0,
+        "title": "Hosted-agent content and tool arguments/results (sensitive content)",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "timeContextFromParameter": "TimeRange"
+      },
+      "name": "hosted-agent-content"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## APIM message sample\nPrompts and completions across the selected **time range**, not the trace input above. This table can contain sensitive content. Use a returned `CorrelationId` in Trace investigation to examine that gateway request."
+      },
+      "name": "message-sample-header"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "",
+        "size": 0,
+        "title": "06 - APIM LLM prompt/completion sample (sensitive content)",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "timeContextFromParameter": "TimeRange"
+      },
+      "name": "llm-sample"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## Telemetry coverage\nSources with ingested rows in the selected time range. An absent source is not proof that its diagnostic setting is enabled or disabled. Check export settings and ingestion delay when expected evidence is missing."
+      },
+      "name": "coverage-header"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "union isfuzzy=true withsource=SourceTable (datatable(TimeGenerated:datetime)[]), ApiManagementGatewayLogs, ApiManagementGatewayLlmLog, ApiManagementGatewayMCPLog, AppRequests, AppDependencies, AppTraces, AppGenAIContent, ContainerAppConsoleLogs_CL, AADServicePrincipalSignInLogs, AADManagedIdentitySignInLogs, AuditLogs, AzureActivity, AzureDiagnostics, ContainerRegistryLoginEvents, ContainerRegistryRepositoryEvents | summarize Rows=count(), Latest=max(TimeGenerated) by SourceTable | order by SourceTable asc",
+        "size": 0,
+        "title": "Telemetry sources with rows in the selected time range",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "timeContextFromParameter": "TimeRange"
+      },
+      "name": "telemetry-coverage"
     }
   ],
   "fallbackResourceIds": [],

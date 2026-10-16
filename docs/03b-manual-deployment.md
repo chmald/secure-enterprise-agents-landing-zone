@@ -20,6 +20,9 @@
 
 Manual provisioning path for workshops or constrained environments where `azd up` is not allowed. It creates the same resource classes as the IaC path, but the AI Gateway tier preview is currently portal-first for many operators, so expect extra validation time. The v1.2 live run used `azd up`; this manual path is **not** live-validated.
 
+> [!IMPORTANT]
+> **Scope: historical core resources, not a complete manual console deployment.** The new browser console uses the supported [azd provisioning path](./03-deployment.md#demo-console-provisioning-and-sign-in), including human-deployer resolution, separate single-tenant Entra app/credential setup, redirect registration, Easy Auth allowlist and managed-identity grants. This portal guide does not reproduce those hooks. Do not claim manual-path console parity; the [limited console live checks](./04-testing.md#live-follow-up-2026-10-16) used the azd-deployed application.
+
 ## At a glance
 
 | | | |
@@ -183,4 +186,4 @@ python scripts/demo_walkthrough.py --ids demo-ids.local.json --agent both --gate
 
 Next: [04 - Testing](./04-testing.md) →
 
-*Last updated: 2026-10-02*
+*Last updated: 2026-10-15*

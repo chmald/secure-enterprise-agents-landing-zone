@@ -2,6 +2,8 @@
   "_template": true,
   "_note": "Copy this file to demo-ids.local.json after deployment and populate real values locally. The populated file is for human reference and local dry-runs only; pipelines must use azd outputs, federated identity, Key Vault, or pipeline variables. Never commit populated IDs, tenant IDs, subscription IDs, API keys, connection strings, or secrets.",
   "resourceGroup": "<AZURE_RESOURCE_GROUP>",
+  "demoConsoleUrl": "https://<console-app>.<environment-domain>",
+  "demoConsoleAppName": "ca-demo-console",
   "foundryAccountName": "<FOUNDRY_ACCOUNT_NAME>",
   "foundryProjectName": "<FOUNDRY_PROJECT_NAME>",
   "foundryProjectEndpoint": "https://<account>.services.ai.azure.com/api/projects/<project>",

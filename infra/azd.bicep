@@ -33,6 +33,12 @@ param apimSku string = 'StandardV2'
 param apimPublisherEmail string
 param apimPublisherName string = 'Demo Publisher'
 param gatewayAppClientId string = ''
+param demoConsoleClientId string
+param demoConsoleAllowedUserId string
+@secure()
+param demoConsoleClientSecret string
+param agentDefaultGateway string = 'apimv2'
+param aigwKeyDelivery string = 'keyvault'
 param tokenLimitTpmPerAgent int = 20000
 param aigwRequestLimitRpm int = 120
 param aigwRuntimeKeySecretName string = 'aigw-runtime-key'
@@ -92,6 +98,11 @@ module main 'main.bicep' = {
     apimPublisherEmail: apimPublisherEmail
     apimPublisherName: apimPublisherName
     gatewayAppClientId: gatewayAppClientId
+    demoConsoleClientId: demoConsoleClientId
+    demoConsoleAllowedUserId: demoConsoleAllowedUserId
+    demoConsoleClientSecret: demoConsoleClientSecret
+    agentDefaultGateway: agentDefaultGateway
+    aigwKeyDelivery: aigwKeyDelivery
     tokenLimitTpmPerAgent: tokenLimitTpmPerAgent
     aigwRequestLimitRpm: aigwRequestLimitRpm
     aigwRuntimeKeySecretName: aigwRuntimeKeySecretName
@@ -155,3 +166,5 @@ output KEY_VAULT_NAME string = main.outputs.KEY_VAULT_NAME
 output KEY_VAULT_URI string = main.outputs.KEY_VAULT_URI
 output AIGW_RUNTIME_KEY_SECRET_NAME string = main.outputs.AIGW_RUNTIME_KEY_SECRET_NAME
 output VNET_ID string = main.outputs.VNET_ID
+output DEMO_CONSOLE_URL string = main.outputs.DEMO_CONSOLE_URL
+output DEMO_CONSOLE_APP_NAME string = main.outputs.DEMO_CONSOLE_APP_NAME

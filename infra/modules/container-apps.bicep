@@ -235,6 +235,7 @@ resource hostedAgentAca 'Microsoft.App/containerApps@2024-03-01' = if (deployAge
 
 output environmentName string = managedEnvironment.name
 output environmentId string = managedEnvironment.id
+output pullIdentityId string = pullIdentity.id
 output defaultDomain string = managedEnvironment.properties.defaultDomain
 output staticIp string = managedEnvironment.properties.staticIp
 output catalogMcpFqdn string = catalogMcp.properties.configuration.ingress.fqdn

@@ -4,6 +4,11 @@
 
 **Run enterprise AI agents securely:** Foundry hosted agents behind an AI Gateway, with governed model and tool access and audit-first landing-zone posture.
 
+**Present from a browser:** the Azure-hosted [demo console](./docs/11-demo-walkthrough.md#browser-console-s1-s5) runs the S1-S5 story without local demo scripts after provisioning. It uses FastAPI and plain HTML/CSS/JS in one Container App, `ca-demo-console`, in the existing environment. Sign in as the deploying human; other users are denied.
+
+> [!IMPORTANT]
+> **The console is deployed with limited live checks; the complete browser acceptance matrix remains pending.** See the [2026-10-16 follow-up](./docs/04-testing.md#live-follow-up-2026-10-16) for the auth/key-delivery repairs, verified paths and remaining gaps. Historical 2026-10-02 badges/evidence below cover the earlier script-driven deployment. Confirmations gate all agent prompts (agents can mutate data), direct writes, and throttle bursts. Use disposable sample data only.
+
 <p align="center">
   <img src="./docs/assets/icons/foundry.svg" width="40" alt="Microsoft Foundry">
   <img src="./docs/assets/icons/foundry-agent-service.svg" width="40" alt="Foundry Agent Service">
@@ -35,10 +40,11 @@
 | | Item | Value |
 |---|---|---|
 | <img src="./docs/assets/icons/foundry-agent-service.svg" width="24" alt=""> | **What you get** | Two Foundry hosted agents (`agent-maf`, `agent-langgraph`) calling models and tools only through a gateway. |
+| <img src="./docs/assets/icons/container-apps.svg" width="24" alt=""> | **Browser front door** | Deployer-only Entra sign-in; agent prompts, direct gateway/MCP/REST checks, bounded throttling and saved KQL with detailed responses and honest status. |
 | <img src="./docs/assets/icons/api-management.svg" width="24" alt=""> | **Default gateway** | <img src="./docs/assets/badges/ga.svg" alt="GA"> Azure API Management Standard v2 - Entra token validation, `llm-*` policies, MCP governance. Live-tested. |
 | <img src="./docs/assets/icons/ai-gateway.svg" width="24" alt=""> | **Preview gateway** | <img src="./docs/assets/badges/public-preview.svg" alt="Public preview"> AI Gateway tier (East US 2 / Sweden Central) - runtime `api-key`, model alias, remote and OpenAPI tool servers. Live-tested. |
-| <img src="./docs/assets/icons/log-analytics.svg" width="24" alt=""> | **Audit proof** | Structured tool-audit rows + 11 saved KQL queries + workbook tiles in Log Analytics / Application Insights. |
-| <img src="./docs/assets/icons/azure-devops.svg" width="24" alt=""> | **Deploy with** | `azd up` (Bicep + hooks), then `azd deploy agent-maf agent-langgraph`. Manual portal path in [03b](./docs/03b-manual-deployment.md). |
+| <img src="./docs/assets/icons/log-analytics.svg" width="24" alt=""> | **Audit proof** | Structured tool-audit rows, 11 saved KQL queries and a [17-panel workbook](./docs/09-monitoring-and-audit.md#workbook) with token charts, global time range and section-specific trace controls. |
+| <img src="./docs/assets/icons/azure-devops.svg" width="24" alt=""> | **Deploy with** | `azd up` (Bicep + hooks + remote builds). Existing environment: `azd provision`, then `azd deploy records-api demo-console` to include the REST collection-routing fix. Console setup/rotation: [03](./docs/03-deployment.md#demo-console-provisioning-and-sign-in). |
 | <img src="./docs/assets/icons/code.svg" width="24" alt=""> | **Example domain** | Manufacturing field operations (parts catalog + work orders). Retargetable by configuration only. |
 
 > [!NOTE]
@@ -47,6 +53,7 @@
 ## What this pattern delivers
 
 - Two **Foundry hosted agents** deployed from separate source folders: `src/agents/maf` and `src/agents/langgraph`.
+- One **browser demo console** (`src/demo-console`): tenant-only Easy Auth plus a deployer object-ID allowlist; the backend verifies the platform-injected principal ID and rejects conflicting owner/tenant claims when supplied. Browser credentials are not forwarded downstream: the backend uses managed identity, not OBO or an agent identity.
 - Three gateway modes: APIM Standard v2 as the default GA path, AI Gateway tier as an opt-in public preview path, or both gateways side by side for validation.
 - Governed model routes, native MCP, REST-as-MCP, and REST routes through gateway controls.
 - Honest identity/audit comparison: APIM Standard v2 validates Entra tokens; AI Gateway tier preview uses a gateway-scoped runtime access key in the `api-key` header.
@@ -75,7 +82,7 @@
     <td align="center" width="25%"><img src="./docs/assets/icons/ai-gateway.svg" width="48" alt="AI Gateway"><br><b>AI Gateway tier</b><br><sub>Preview gateway: model alias, tool servers, runtime key.</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="./docs/assets/icons/container-apps.svg" width="48" alt="Container Apps"><br><b>Container Apps</b><br><sub>Runs <code>catalog-mcp</code> and <code>records-api</code> tool backends.</sub></td>
+    <td align="center"><img src="./docs/assets/icons/container-apps.svg" width="48" alt="Container Apps"><br><b>Container Apps</b><br><sub>Runs <code>catalog-mcp</code>, <code>records-api</code>, and the deployer-only <code>ca-demo-console</code>.</sub></td>
     <td align="center"><img src="./docs/assets/icons/container-registry.svg" width="48" alt="Container Registry"><br><b>Container Registry</b><br><sub>Stores agent and tool images (remote build).</sub></td>
     <td align="center"><img src="./docs/assets/icons/key-vault.svg" width="48" alt="Key Vault"><br><b>Key Vault</b><br><sub>Holds the AI Gateway runtime key; never in code (env delivery is an explicit demo-only opt-in).</sub></td>
     <td align="center"><img src="./docs/assets/icons/entra-id.svg" width="48" alt="Microsoft Entra ID"><br><b>Microsoft Entra ID</b><br><sub>Gateway app registration; token audience for APIM.</sub></td>
@@ -127,12 +134,14 @@ Both agents run on the **official Foundry hosts** and declare hosted protocol `r
 | <img src="./docs/assets/icons/api-management.svg" width="20" alt=""> | **Tools through the gateway** | Native MCP, REST-as-MCP, allow-lists. | [08 - Tools, APIM, MCP topology](./docs/08-tools-apim-mcp-topology.md) |
 | <img src="./docs/assets/icons/log-analytics.svg" width="20" alt=""> | **Monitoring and audit** | Saved KQL, workbook, alerts, audit proof. | [09 - Monitoring and audit](./docs/09-monitoring-and-audit.md) |
 | <img src="./docs/assets/icons/virtual-network.svg" width="20" alt=""> | **Enterprise posture and scale** | Network isolation, limits, known gaps. | [10 - Enterprise posture and scale](./docs/10-enterprise-posture-and-scale.md) |
-| <img src="./docs/assets/icons/workbooks.svg" width="20" alt=""> | **End-to-end walkthrough** | Scripted agent × gateway matrix. | [11 - Demo walkthrough](./docs/11-demo-walkthrough.md) |
+| <img src="./docs/assets/icons/workbooks.svg" width="20" alt=""> | **End-to-end walkthrough** | Browser S1-S5; scripts retained for developer rehearsal and historical evidence. | [11 - Demo walkthrough](./docs/11-demo-walkthrough.md) |
 | <img src="./docs/assets/icons/policy.svg" width="20" alt=""> | **Reference and testing** | Every variable, output, test. | [12 - Configuration reference](./docs/12-configuration-reference.md), [04 - Testing](./docs/04-testing.md), [05 - Troubleshooting](./docs/05-troubleshooting.md) |
 
 [![Demo walkthrough story](./docs/assets/demo-walkthrough-story.png)](./docs/assets/demo-walkthrough-story.png)
 
 ## Quick start
+
+Provisioning still requires a local CLI session and a **human** signed in to Azure CLI with permission to create Entra apps/credentials. `preprovision` checks the intended tenant/subscription before setup operations, resolves the signed-in human into `AZURE_PRINCIPAL_ID`, and configures a separate single-tenant console app and secret. `postprovision` sets its redirect URI. See [console provisioning](./docs/03-deployment.md#demo-console-provisioning-and-sign-in); never print or share the populated azd environment.
 
 > [!WARNING]
 > Replace placeholders with your tenant/subscription. **Never rely on ambient `az` or `azd` state** - both CLIs keep separate logins that drift between tenants. The `preprovision` hook stops the deployment if the `az` context does not match `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID`.
@@ -141,7 +150,7 @@ Both agents run on the **official Foundry hosts** and declare hosted protocol `r
 |---|---|---|---|
 | **1** | <img src="./docs/assets/icons/entra-id.svg" width="28" alt="Entra"> | Sign in tenant-explicitly with **both** `azd auth login --tenant-id <TENANT_ID>` and `az login --tenant <TENANT_ID>`; then `az account set`. | - [ ] `az account show` prints the intended tenant + subscription. |
 | **2** | <img src="./docs/assets/icons/subscription.svg" width="28" alt="Subscription"> | Register the <img src="./docs/assets/badges/preview.svg" alt="Preview"> `AIGatewayPreview` feature once per subscription (see [02](./docs/02-prerequisites.md#register-the-ai-gateway-preview-feature)), then create the azd environment and set the knobs (`AI_GATEWAY_MODE both`, `MODEL_NAME gpt-5.5`, `DOMAIN_PROFILE manufacturing-field-ops`). | - [ ] `az feature show` reports `Registered`; `azd env get-values` shows the values. |
-| **3** | <img src="./docs/assets/icons/container-apps.svg" width="28" alt="Container Apps"> | `azd up` provisions infra, runs the hooks, and deploys tools + agents; the `postdeploy` hook grants each agent instance identity Key Vault Secrets User. | - [ ] `demo-ids.local.json` exists; Key Vault holds `aigw-runtime-key`. |
+| **3** | <img src="./docs/assets/icons/container-apps.svg" width="28" alt="Container Apps"> | `azd up` provisions infra, configures console sign-in, and deploys tools + agents + console; agent `postdeploy` grants Key Vault access. | - [ ] Open `DEMO_CONSOLE_URL` as the deployer; inspect each response/status. Isolated mode needs VNet/VPN browser access. |
 | **4** | <img src="./docs/assets/icons/api-management.svg" width="28" alt="APIM"> | Validate both gateways with `scripts/validate_gateway.py --target apimv2` then `--target aigateway`. | - [ ] Both targets finish with no failed checks. |
 | **5** | <img src="./docs/assets/icons/ai-gateway.svg" width="28" alt="AI Gateway"> | Second pass: `AGENT_DEFAULT_GATEWAY=aigateway` then `azd deploy agent-maf agent-langgraph`. | - [ ] Walkthrough dry-run passes for `--gateway aigateway`. |
 
@@ -149,14 +158,14 @@ Both agents run on the **official Foundry hosts** and declare hosted protocol `r
 <summary><b>Full command block (copy/paste)</b></summary>
 
 ```powershell
-az feature register --namespace Microsoft.ApiManagement --name AIGatewayPreview
-az feature show --namespace Microsoft.ApiManagement --name AIGatewayPreview --query properties.state -o tsv
-az provider register --namespace Microsoft.ApiManagement
-
 azd auth login --tenant-id <TENANT_ID>
 az login --tenant <TENANT_ID>
 az account set --subscription <SUBSCRIPTION_ID>
 az account show --query "{tenant:tenantId, subscription:id, subName:name, user:user.name}" -o table
+
+az feature register --namespace Microsoft.ApiManagement --name AIGatewayPreview --subscription <SUBSCRIPTION_ID>
+az feature show --namespace Microsoft.ApiManagement --name AIGatewayPreview --subscription <SUBSCRIPTION_ID> --query properties.state -o tsv
+az provider register --namespace Microsoft.ApiManagement --subscription <SUBSCRIPTION_ID>
 
 azd env new <ENV_NAME>
 azd env set AZURE_TENANT_ID <TENANT_ID>
@@ -174,6 +183,10 @@ azd env set DOMAIN_PROFILE manufacturing-field-ops
 
 azd up
 ```
+
+Open the `DEMO_CONSOLE_URL` output and follow [browser S1-S5](./docs/11-demo-walkthrough.md#browser-console-s1-s5). The direct gateway dropdown changes **direct checks only**; agent traffic still uses deployed `HOSTED_DEFAULT_GATEWAY`. OBO and the optional ACA agent comparison remain manual/unavailable unless explicitly deployed. Network isolation is explained with diagrams/manual checks, not simulated live results.
+
+The displayed hosted gateway is a **provisioning snapshot**, not live discovery. When switching `AGENT_DEFAULT_GATEWAY`, reprovision to sync console configuration as well as redeploying agents; agent-only deployment can leave the displayed snapshot stale. S1 invokes Responses only, not a readiness probe; S5 “passed” means rows returned, not a validated audit assertion.
 
 To switch the agents between gateways after the first pass:
 
@@ -262,4 +275,4 @@ Upstream samples were used as design references; this demo re-implements the pat
 
 ---
 
-*Last updated: 2026-10-08*
+*Last updated: 2026-10-15*

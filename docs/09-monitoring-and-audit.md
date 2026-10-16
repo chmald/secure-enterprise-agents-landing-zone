@@ -31,7 +31,7 @@ This is the **audit plane** of the landing zone: how a security, compliance or p
 | <img src="./assets/icons/log-analytics.svg" width="24" alt=""/> | **One workspace** | Gateway, container, Foundry, Key Vault, registry and (opt-in) Activity Log and Entra data land in a single Log Analytics workspace (`PerGB2018`, `LOG_RETENTION_DAYS`, default 90). |
 | <img src="./assets/icons/application-insights.svg" width="24" alt=""/> | **Workspace-based Application Insights** | Agent and tool OpenTelemetry spans, plus the structured `tool_audit` record, share the same workspace. |
 | <img src="./assets/icons/query-pack.svg" width="24" alt=""/> | **11 saved queries** | A query pack named `NN-slug` that answers the audit, usage, denial, trace, identity, control-plane, content-safety and Foundry questions. |
-| <img src="./assets/icons/workbooks.svg" width="24" alt=""/> | **1 workbook, 7 tiles** | Token usage, gateway comparison, tool calls, denials, latency, LLM sample and end-to-end trace lookup. |
+| <img src="./assets/icons/workbooks.svg" width="24" alt=""/> | **1 workbook, 17 query panels** | Two token trend charts plus all 11 saved queries, telemetry coverage, gateway latency, hosted-agent content, and Key Vault/registry audit. Seven labeled sections; optional section-specific trace input. |
 | <img src="./assets/icons/alerts.svg" width="24" alt=""/> | **Up to 5 alerts** | Scheduled-query rules (severity 2) for throttling spikes, denied tools, 5xx, content-safety blocks and agent sign-in failures. |
 | <img src="./assets/icons/sentinel.svg" width="24" alt=""/> | **Opt-in SIEM / CSPM path** | Microsoft Sentinel onboarding, Activity Log export and Entra diagnostics are single `azd env set` switches. |
 
@@ -93,13 +93,15 @@ Token accounting has two layers: the **log** (`ApiManagementGatewayLlmLog`, per 
 
 | Signal | <img src="./assets/icons/api-management.svg" width="20" alt=""/> Where it is set | Dimensions / key | Used for |
 |---|---|---|---|
-| `llm-emit-token-metric` | Model API policy | Agent `appid`, user `oid`, API, subscription | Per-agent and per-user consumption in Azure Monitor metrics and workbook tile `token-usage`. |
+| `llm-emit-token-metric` | Model API policy | Agent `appid`, user `oid`, API, subscription | Per-agent and per-user consumption in Azure Monitor metrics. The workbook uses logs/spans instead; it does not query this custom metric directly. |
 | `llm-token-limit` | Model API policy | Counter key = validated `azp` claim; `TOKEN_LIMIT_TPM_PER_AGENT` (default 20,000 tokens per minute) | Per-agent throttling; a breach returns HTTP 429 and feeds the `token-limit-throttling-spike` alert. |
 | `llm-content-safety` | Model API policy, gated by `ENABLE_CONTENT_SAFETY` | Content-safety backend | Blocks harmful prompts; surfaces in query 09 and the `content-safety-blocks` alert. |
 | `ApiManagementGatewayLlmLog` | Diagnostic category `GatewayLlmLogs` | `CorrelationId`, `ModelName`, `PromptTokens`, `CompletionTokens`, `TotalTokens` | Per-request token audit; joined to the tool audit by `gateway_request_id`. |
 
 > [!TIP]
 > To attribute tokens to a person, join `ApiManagementGatewayLlmLog.CorrelationId` to the audit record's `gateway_request_id` (query 02 and query 01 do this for you). The `x-gw-user-oid` and `x-gw-agent-appid` headers added by APIM are the source of the dimensions.
+
+Correlation must be present in the actual source rows. Model and tool requests can have different gateway request IDs; a missing join remains unknown token attribution, not zero spend. Query 02 keeps hosted-agent `agent_name` separate from an actual `agent_appid`. Gateway and agent token observations describe overlapping work and must not be added together.
 
 ## The audit record
 
@@ -133,6 +135,10 @@ Identity travels in the headers `x-gw-agent-appid`, `x-gw-agent-oid`, `x-gw-user
 
 ## The saved queries
 
+The new [browser console S5](./11-demo-walkthrough.md#s5--run-bounded-saved-kql-and-inspect-actual-evidence) runs only the fixed saved-query allowlist **01-11**, using backend managed identity with **Log Analytics Reader** at workspace scope. It supplies a **one-hour API timespan** and appends **`take 200`**; query **04** accepts a trace ID. It displays rows, detailed responses and trace IDs, not a fabricated workbook or alert result. No arbitrary KQL is accepted. **“Passed” means the query returned rows, not that an audit assertion was validated.** Review row contents to establish the actual claim.
+
+**Empty results are `not_run`**, with ingestion-delay/no-evidence guidance, never a pass. Response-header trace IDs are advisory correlation handles; actual source rows must establish propagation/tool use. The [2026-10-16 follow-up](./04-testing.md#live-follow-up-2026-10-16) records limited console/workbook checks and remaining browser acceptance work; historical saved-query evidence below comes from the earlier script-driven run.
+
 Eleven queries are deployed to a Log Analytics **query pack** by `modules/querypack.bicep` (names `NN-slug`, loaded with `loadTextContent` from `infra/monitoring/queries/`). Open the workspace in the portal, choose *Queries*, and filter by the pack ([query packs](https://learn.microsoft.com/en-us/azure/azure-monitor/logs/query-packs)). From a terminal, run any query with `python scripts/run_audit_queries.py --query 01` and `--trace-id <id>` for query 04.
 
 The KQL blocks below are quoted verbatim from the files in `infra/monitoring/queries/`.
@@ -153,8 +159,8 @@ let ToolAudit =
     union isfuzzy=true
         (ContainerAppConsoleLogs_CL | project TimeGenerated, RawLog=tostring(Log_s)),
         (AppTraces | project TimeGenerated, RawLog=tostring(Message))
-    | where RawLog has '"event":"tool_audit"'
     | extend audit = parse_json(RawLog)
+    | where tostring(audit.event) == "tool_audit"
     | project
         TimeGenerated,
         trace_id = tostring(audit.trace_id),
@@ -166,6 +172,8 @@ let ToolAudit =
         human_oid = tostring(audit.human_principal.oid),
         agent_appid = tostring(audit.agent_principal.appid),
         agent_oid = tostring(audit.agent_principal.oid),
+        gateway = tostring(audit.gateway),
+        caller = tostring(audit.caller),
         gateway_request_id = tostring(audit.gateway_request_id),
         status_code = toint(audit.status_code);
 let GatewayTools =
@@ -177,7 +185,7 @@ let Tokens =
 ToolAudit
 | join kind=leftouter GatewayTools on $left.gateway_request_id == $right.CorrelationId
 | join kind=leftouter Tokens on CorrelationId
-| project TimeGenerated, trace_id, human_oid, agent_appid, agent_oid, service, tool=coalesce(tool, ToolName), operation=coalesce(operation, Method), decision, reason, status_code, PromptTokens, CompletionTokens, TotalTokens, ServerName, TransportType
+| project TimeGenerated, trace_id, gateway_request_id, gateway, caller, human_oid, agent_appid, agent_oid, service, tool=coalesce(tool, ToolName), operation=coalesce(operation, Method), decision, reason, status_code, PromptTokens, CompletionTokens, TotalTokens, ServerName, TransportType
 | order by TimeGenerated desc
 ```
 
@@ -199,28 +207,30 @@ ToolAudit
 let AgentContext =
     AppTraces
     | where Message has "agent_appid" or tostring(Properties.agent_appid) != ""
-    | project CorrelationId=tostring(Properties.gateway_request_id), agent_appid=tostring(Properties.agent_appid), user_oid=tostring(Properties.user_oid);
+    | project CorrelationId=tostring(Properties.gateway_request_id), agent_appid=tostring(Properties.agent_appid), user_oid=tostring(Properties.user_oid)
+    | where isnotempty(CorrelationId)
+    | summarize agent_appid=take_any(agent_appid), user_oid=take_any(user_oid) by CorrelationId;
 let ApimLlmLog =
     ApiManagementGatewayLlmLog
     | summarize PromptTokens=sum(PromptTokens), CompletionTokens=sum(CompletionTokens), Requests=count() by CorrelationId, ModelName
     | join kind=leftouter AgentContext on CorrelationId
     | summarize Requests=sum(Requests), PromptTokens=sum(PromptTokens), CompletionTokens=sum(CompletionTokens) by agent_appid, user_oid, ModelName
-    | extend Source="apim-standard-v2-llm-log";
+    | extend Source="apim-standard-v2-llm-log", agent_name="";
 let TierRequests =
     AppRequests
     | where AppRoleName startswith "aigw-" and Name has "/models/"
     | extend m=todynamic(Measurements)
     | summarize Requests=count(), PromptTokens=tolong(sum(todouble(m["gen_ai.usage.input_tokens"]))), CompletionTokens=tolong(sum(todouble(m["gen_ai.usage.output_tokens"])))
-    | extend Source="aigateway-tier-app-insights", agent_appid="", user_oid="", ModelName="";
+    | extend Source="aigateway-tier-app-insights", agent_appid="", agent_name="", user_oid="", ModelName="";
 let AgentSpans =
     AppDependencies
     | extend p=todynamic(Properties)
     | where tostring(p["gen_ai.operation.name"]) == "chat"
-    | summarize Requests=count(), PromptTokens=sum(tolong(p["gen_ai.usage.input_tokens"])), CompletionTokens=sum(tolong(p["gen_ai.usage.output_tokens"])) by agent_appid=tostring(p["gen_ai.agent.name"]), ModelName=tostring(p["gen_ai.request.model"])
-    | extend Source="hosted-agent-genai-span", user_oid="";
+    | summarize Requests=count(), PromptTokens=sum(tolong(p["gen_ai.usage.input_tokens"])), CompletionTokens=sum(tolong(p["gen_ai.usage.output_tokens"])) by agent_name=coalesce(tostring(p["gen_ai.agent.name"]), AppRoleName), ModelName=tostring(p["gen_ai.request.model"])
+    | extend Source="hosted-agent-genai-span", agent_appid="", user_oid="";
 union isfuzzy=true ApimLlmLog, TierRequests, AgentSpans
 | extend TotalTokens=PromptTokens + CompletionTokens
-| project Source, agent_appid, user_oid, ModelName, Requests, PromptTokens, CompletionTokens, TotalTokens
+| project Source, agent_appid, agent_name, user_oid, ModelName, Requests, PromptTokens, CompletionTokens, TotalTokens
 | order by TotalTokens desc
 ```
 
@@ -242,8 +252,8 @@ let AuditDenied =
     union isfuzzy=true
         (ContainerAppConsoleLogs_CL | project TimeGenerated, RawLog=tostring(Log_s)),
         (AppTraces | project TimeGenerated, RawLog=tostring(Message))
-    | where RawLog has '"event":"tool_audit"'
     | extend audit=parse_json(RawLog)
+    | where tostring(audit.event) == "tool_audit"
     | where tostring(audit.decision) == "denied"
     | project TimeGenerated, Source="tool_audit", CorrelationId=tostring(audit.gateway_request_id), Status=toint(audit.status_code), Reason=tostring(audit.reason), Tool=tostring(audit.tool);
 let GatewayDenied =
@@ -267,21 +277,37 @@ union AuditDenied, GatewayDenied, McpDenied
 |---|---|
 | **Saved query** | `04-end-to-end-trace` (parameter `traceId`) |
 | **Purpose** | Every known hop for a W3C trace id or an APIM correlation id, ordered by time. Powers the workbook trace lookup. |
-| **Tables** | `AppRequests`, `AppDependencies`, `AppTraces`, `ApiManagementGatewayLogs`, `ApiManagementGatewayMCPLog`, `ApiManagementGatewayLlmLog` |
+| **Tables** | `AppRequests`, `AppDependencies`, `AppTraces`, `AppGenAIContent`, `ContainerAppConsoleLogs_CL`, `ApiManagementGatewayLogs`, `ApiManagementGatewayMCPLog`, `ApiManagementGatewayLlmLog` |
 
 <details><summary><b>Show KQL</b></summary>
 
 ```kusto
-// Question: show every known hop for a trace or APIM correlation id. Tables: AppRequests, AppDependencies, AppTraces, ApiManagementGatewayLogs, ApiManagementGatewayMCPLog, ApiManagementGatewayLlmLog.
+// Question: show evidenced hops for a trace or APIM correlation id. Gateway rows link through tool_audit.gateway_request_id, not the API operation name.
 declare query_parameters(traceId:string = "");
+let ToolAudit =
+    union isfuzzy=true
+        (datatable(TimeGenerated:datetime, RawLog:string)[]),
+        (ContainerAppConsoleLogs_CL | project TimeGenerated, RawLog=tostring(Log_s)),
+        (AppTraces | project TimeGenerated, RawLog=tostring(Message))
+    | extend audit=parse_json(RawLog)
+    | where tostring(audit.event) == "tool_audit"
+    | project TimeGenerated, Source="tool_audit", Name=tostring(audit.tool), OperationId=tostring(audit.trace_id),
+        ParentId=tostring(audit.span_id), CorrelationId=tostring(audit.gateway_request_id),
+        Message=strcat(audit.decision, " ", audit.status_code), DurationMs=todouble(audit.latency_ms), Properties=audit;
+let GatewayIds = ToolAudit
+    | where isnotempty(traceId) and (OperationId == traceId or CorrelationId == traceId)
+    | where isnotempty(CorrelationId)
+    | distinct CorrelationId;
 union isfuzzy=true
+    ToolAudit,
     (AppRequests | project TimeGenerated, Source="AppRequests", Name, OperationId, ParentId, CorrelationId="", Message=tostring(Success), DurationMs=DurationMs, Properties),
     (AppDependencies | project TimeGenerated, Source="AppDependencies", Name, OperationId, ParentId, CorrelationId="", Message=tostring(Success), DurationMs=DurationMs, Properties),
     (AppTraces | project TimeGenerated, Source="AppTraces", Name=tostring(Properties["span.name"]), OperationId, ParentId, CorrelationId=tostring(Properties.gateway_request_id), Message, DurationMs=real(null), Properties),
-    (ApiManagementGatewayLogs | project TimeGenerated, Source="ApiManagementGatewayLogs", Name=ApiId, OperationId="", ParentId="", CorrelationId, Message=strcat(ResponseCode, " ", ErrorMessage), DurationMs, Properties=pack_all()),
-    (ApiManagementGatewayMCPLog | project TimeGenerated, Source="ApiManagementGatewayMCPLog", Name=ToolName, OperationId="", ParentId="", CorrelationId, Message=Error, DurationMs=real(null), Properties=pack_all()),
-    (ApiManagementGatewayLlmLog | project TimeGenerated, Source="ApiManagementGatewayLlmLog", Name=ModelName, OperationId="", ParentId="", CorrelationId, Message=strcat("tokens=", TotalTokens), DurationMs=real(null), Properties=pack_all())
-| where isempty(traceId) or OperationId == traceId or ParentId == traceId or CorrelationId == traceId or tostring(Properties.trace_id) == traceId
+    (ApiManagementGatewayLogs | project TimeGenerated, Source="ApiManagementGatewayLogs", Name=ApiId, OperationId="", ParentId="", CorrelationId, Message=strcat(ResponseCode, " ", LastErrorMessage), DurationMs=todouble(TotalTime), Properties=bag_pack("ApiId", ApiId, "LastErrorReason", LastErrorReason)),
+    (ApiManagementGatewayMCPLog | project TimeGenerated, Source="ApiManagementGatewayMCPLog", Name=ToolName, OperationId="", ParentId="", CorrelationId, Message=Error, DurationMs=real(null), Properties=bag_pack("ServerName", ServerName, "Method", Method, "SessionId", SessionId)),
+    (ApiManagementGatewayLlmLog | project TimeGenerated, Source="ApiManagementGatewayLlmLog", Name=ModelName, OperationId="", ParentId="", CorrelationId, Message=strcat("tokens=", TotalTokens), DurationMs=real(null), Properties=bag_pack("PromptTokens", PromptTokens, "CompletionTokens", CompletionTokens)),
+    (AppGenAIContent | project TimeGenerated, Source="AppGenAIContent", Name=AgentName, OperationId=TraceId, ParentId=ParentSpanId, CorrelationId="", Message=strcat("model=", ModelName), DurationMs=real(null), Properties=bag_pack("SpanId", SpanId, "AgentId", AgentId))
+| where isempty(traceId) or OperationId == traceId or ParentId == traceId or CorrelationId == traceId or tostring(Properties.trace_id) == traceId or CorrelationId in (GatewayIds)
 | order by TimeGenerated asc
 ```
 
@@ -346,6 +372,7 @@ ApiManagementGatewayLlmLog
 ```kusto
 // Question: which agent-related service principal or managed identity sign-ins succeeded/failed? Tables: AADServicePrincipalSignInLogs, AADManagedIdentitySignInLogs, AuditLogs.
 union isfuzzy=true
+    (datatable(TimeGenerated:datetime, Source:string, ServicePrincipalId:string, ServicePrincipalName:string, AppId:string, ResourceDisplayName:string, ResultType:string, ResultDescription:string, IPAddress:string, ConditionalAccessStatus:string)[]),
     (AADServicePrincipalSignInLogs | project TimeGenerated, Source="ServicePrincipal", ServicePrincipalId, ServicePrincipalName, AppId, ResourceDisplayName, ResultType, ResultDescription, IPAddress, ConditionalAccessStatus),
     (AADManagedIdentitySignInLogs | project TimeGenerated, Source="ManagedIdentity", ServicePrincipalId, ServicePrincipalName, AppId, ResourceDisplayName, ResultType, ResultDescription, IPAddress, ConditionalAccessStatus),
     (AuditLogs | where tostring(TargetResources) has "agent" or OperationName has "agent" | project TimeGenerated, Source="Audit", ServicePrincipalId="", ServicePrincipalName=OperationName, AppId="", ResourceDisplayName=tostring(TargetResources), ResultType=tostring(Result), ResultDescription=tostring(ResultReason), IPAddress="", ConditionalAccessStatus="")
@@ -366,7 +393,9 @@ union isfuzzy=true
 
 ```kusto
 // Question: who changed gateway, Foundry, Key Vault, Container Apps, or monitoring resources? Tables: AzureActivity.
-AzureActivity
+union isfuzzy=true
+    (datatable(TimeGenerated:datetime, Caller:string, OperationNameValue:string, ActivityStatusValue:string, ResourceGroup:string, ResourceProviderValue:string, ResourceId:string, CorrelationId:string, Properties:string)[]),
+    AzureActivity
 | where ResourceProviderValue in~ ("MICROSOFT.APIMANAGEMENT", "MICROSOFT.COGNITIVESERVICES", "MICROSOFT.APP", "MICROSOFT.KEYVAULT", "MICROSOFT.INSIGHTS", "MICROSOFT.OPERATIONALINSIGHTS")
 | project TimeGenerated, Caller, OperationNameValue, ActivityStatusValue, ResourceGroup, ResourceProviderValue, ResourceId, CorrelationId, Properties
 | order by TimeGenerated desc
@@ -437,7 +466,7 @@ let Tier =
     | summarize Requests=count(), Failed=countif(Success == false), InputTokens=tolong(sum(todouble(m["gen_ai.usage.input_tokens"]))), OutputTokens=tolong(sum(todouble(m["gen_ai.usage.output_tokens"]))), AvgDurationMs=avg(DurationMs) by Gateway="aigateway-tier", Surface, Route=Name, TimeGenerated=bin(TimeGenerated, 1h);
 let TierMcp =
     ApiManagementGatewayMCPLog
-    | summarize Requests=count(), Failed=countif(isnotempty(Error)), InputTokens=long(0), OutputTokens=long(0), AvgDurationMs=real(null) by Gateway="aigateway-tier-mcp-log", Surface="mcp", Route=strcat(McpServerEndpoint, " ", Method), TimeGenerated=bin(TimeGenerated, 1h);
+    | summarize Requests=count(), Failed=countif(isnotempty(Error)), InputTokens=long(null), OutputTokens=long(null), AvgDurationMs=real(null) by Gateway="mcp-resource-log", ResourceId=tostring(_ResourceId), Surface="mcp", Route=strcat(McpServerEndpoint, " ", Method), TimeGenerated=bin(TimeGenerated, 1h);
 let StandardV2 =
     ApiManagementGatewayLlmLog
     | summarize Requests=count(), Failed=long(0), InputTokens=sum(tolong(PromptTokens)), OutputTokens=sum(tolong(CompletionTokens)), AvgDurationMs=real(null) by Gateway="apim-standard-v2", Surface="llm", Route=strcat("model=", ModelName), TimeGenerated=bin(TimeGenerated, 1h);
@@ -447,7 +476,7 @@ let AgentSpans =
     | where isnotempty(tostring(p["gen_ai.operation.name"]))
     | summarize Requests=count(), Failed=countif(Success == false), InputTokens=sum(tolong(p["gen_ai.usage.input_tokens"])), OutputTokens=sum(tolong(p["gen_ai.usage.output_tokens"])), AvgDurationMs=avg(DurationMs) by Gateway=strcat("hosted-agent:", AppRoleName), Surface=tostring(p["gen_ai.operation.name"]), Route=tostring(p["gen_ai.request.model"]), TimeGenerated=bin(TimeGenerated, 1h);
 union isfuzzy=true Tier, TierMcp, StandardV2, AgentSpans
-| project TimeGenerated, Gateway, Surface, Route, Requests, Failed, InputTokens, OutputTokens, AvgDurationMs
+| project TimeGenerated, Gateway, Surface, Route, ResourceId, Requests, Failed, InputTokens, OutputTokens, AvgDurationMs
 | order by TimeGenerated desc, Gateway asc, Surface asc
 ```
 
@@ -471,17 +500,47 @@ Payload logging is off by default. Never read `context.Response.Body` in an MCP 
 
 ## Workbook
 
-<img src="./assets/icons/workbooks.svg" width="28" alt=""/> The workbook (`infra/monitoring/workbook.json`, *Notebook/1.0*, deployed by `modules/workbook.bicep`) has a title tile and seven query tiles. Open it from the `WORKBOOK_ID` output ([workbooks](https://learn.microsoft.com/en-us/azure/azure-monitor/visualize/workbooks-overview)).
+<img src="./assets/icons/workbooks.svg" width="28" alt=""/> The workbook has **17 query panels**, including **two side-by-side token timecharts** with explicit input/output series and legends. Open it from the `WORKBOOK_ID` output ([workbooks](https://learn.microsoft.com/en-us/azure/azure-monitor/visualize/workbooks-overview)). The top time-range control (default **24 hours**) applies to every section.
+
+| Section | Contents and filter scope |
+|---|---|
+| **Overview - token usage** | Gateway input/output tokens by lane and hosted-agent chat tokens in separate charts. Time range only; do not add the overlapping layers together. |
+| **Token usage details** | Source/identity/model totals and gateway/agent observation tables. Time range only. |
+| **Gateway health and tool activity** | Latency/5xx, audit identity/decision, MCP tools and sessions. Time range only. |
+| **Security and platform audit** | Denials, content-safety signals, identity export, resource changes, Foundry, Key Vault and registry audit. Time range only. |
+| **Trace investigation** | The optional trace input lives here and filters only the timeline and hosted-agent content. Blank shows recent hops. The timeline accepts W3C trace IDs or APIM correlation IDs; hosted-agent content matches W3C trace IDs only. |
+| **APIM message sample** | Sensitive prompt/completion sample for the selected time range, not the trace input. Copy a sample's correlation ID into Trace investigation to inspect that request. |
+| **Telemetry coverage** | Sources with ingested evidence in the selected time range. |
+
+`infra/monitoring/workbook.json` is the layout, not a standalone import: `modules/workbook.bicep` binds the 11 saved KQL files into their panels at deployment, supplies the workspace scope, and substitutes the escaped trace input for query 04's SDK parameter declaration. Every panel also receives source-level `TimeGenerated {TimeRange:query}` filters, before joins, aggregation, time bins and row limits; filtering a finished totals table or binned timestamp would be too late. This includes inline audit/content/coverage queries. The Overview displays the selected label, start/end and bucket size. The saved KQL remains usable unchanged by the query pack and console, whose callers supply their own time range.
+
+The two overview charts derive series from query 11, filtering gateway LLM and hosted-agent **chat** observations separately; parent `invoke_agent` spans and MCP rows are not added to the agent chart. For the charts only, the hourly source bins become `bin_at` buckets using `{TimeRange:grain}`, anchored at `{TimeRange:start}`. In KQL, Workbook start/end parameters already expand to datetime expressions: use `from {TimeRange:start} to {TimeRange:end}` directly, **not** `datetime({TimeRange:start})`, which produces an invalid nested expression. A single `Tokens` measure is segmented by a `Series` label such as `apim-standard-v2 / input` or `agent-maf / output`, rather than combining two Y measures with grouping.
+
+`make-series` fills empty buckets across the selected start/end for each observed series, preventing the time axis from shrinking to the few timestamps that had traffic ([Workbook time-series guidance](https://learn.microsoft.com/en-us/azure/azure-monitor/visualize/workbooks-chart-visualizations#summarize-vs-make-series)). Zero-filled gaps are not new observations or proof of a passing control. If the selected window has no token observations, no synthetic gateway/agent series is created and the no-data message is shown. Each chart limits the intermediate result to **200 series**, then expands the timestamp/token arrays together with `mv-expand` into scalar **datetime `TimeGenerated`**, **long `Tokens`**, and **string `Series`** columns. Do not bind the dynamic arrays directly to chart axes: they can render as JSON category labels with zero numeric totals. The detail-table 200-row limit is not applied to the expanded chart points; for example, four series across seven days at three-hour intervals require all **224 points**. Saved-query detail panels return at most **200 rows**, hosted content **50**, and platform audit **100**, within the selected range. The workbook, query pack and console share maintained KQL rather than hand-copied versions. Updating the layout/KQL requires a workbook deployment; changing console application code alone does not update the workbook.
 
 | Tile | Title | Answers | Backed by |
 |---|---|---|---|
-| `token-usage` | Token usage by model / agent dimension | Who is spending tokens on which model? | `ApiManagementGatewayLlmLog` |
-| `standard-v2-vs-aigw-tier` | Standard v2 vs AI Gateway tier token usage | Do both gateway lanes meter similarly? | Query 11 (`AppRequests` for the tier) |
-| `tool-calls` | Tool calls by server and tool | Which tools are hot? | `ApiManagementGatewayMCPLog` |
+| `gateway-token-trend` | Gateway LLM tokens - APIM vs AI Gateway tier | How do input/output tokens compare by gateway lane over the selected window? | Query 11 filtered to gateway LLM observations; timechart |
+| `agent-token-trend` | Hosted-agent chat tokens | Which agent chat spans recorded tokens over time? | Query 11 filtered to hosted-agent `chat` spans; separate timechart |
+| `telemetry-coverage` | Sources with rows in the selected range | Which sources actually have ingested evidence? | Source table counts and latest timestamps |
+| `who-called-which-tool` | Audit identity, tool and decision | What identity/caller was actually recorded? | Query 01 |
+| `token-usage` | Token usage by source and recorded identity/model | Which layer recorded token consumption? | Query 02; names and application IDs are distinct |
+| `standard-v2-vs-aigw-tier` | Gateway and hosted-agent observations | What did each telemetry layer record? | Query 11; MCP rows include `ResourceId`, not an assumed tier label |
+| `tool-calls` | MCP methods, tools and sessions | Which MCP requests and tools were recorded? | Query 05 |
 | `denied-throttled` | Denied and throttled | Where are controls firing? | Query 03 |
-| `latency-5xx` | Gateway latency and 5xx (P95 + failures) | Is the gateway healthy? | `ApiManagementGatewayLogs` |
+| `latency-5xx` | Gateway latency and 5xx (P95 + failures) | What latency and failures were observed? | APIM `TotalTime` and tier `AppRequests.DurationMs`, both milliseconds |
 | `llm-sample` | LLM log sample | What do prompts and completions look like? | Query 06 |
-| `trace-lookup` | End-to-end trace lookup (`{traceId}` parameter) | What happened to one request? | Query 04 |
+| `hosted-agent-content` | Agent prompts/completions and tool content | What content was exported for an agent trace? | `AppGenAIContent`; sensitive content |
+| `trace-lookup` | Trace/correlation timeline | Which hops can actually be linked? | Query 04 plus `tool_audit.gateway_request_id`; blank input is valid |
+| `identity-sign-ins` | Entra sign-ins and agent audit | Which identity events were exported? | Query 07; requires Entra diagnostics |
+| `control-plane-changes` | Resource changes | Which management operations were exported? | Query 08; requires Activity Log export |
+| `content-safety` | Content-safety signals | Are there recorded filtering/block signals? | Query 09; inspect messages before attributing a policy |
+| `foundry-audit` | Foundry audit and application traces | What account/project or application events were recorded? | Query 10 |
+| `platform-audit` | Key Vault and registry audit | What vault/registry operations and results were logged? | `AzureDiagnostics`, `ContainerRegistryLoginEvents`, `ContainerRegistryRepositoryEvents` |
+
+Empty panels mean **no evidence in the selected range**, not a passing control. Optional identity/Activity Log queries have typed empty inputs to retain a result schema when sources are absent; Azure can still report source-resolution warnings for tables that do not exist. Do not treat partial results as complete evidence. Coverage lists sources with rows, not proof that every diagnostic switch is enabled. Missing cross-system links remain missing: APIM's `OperationId` is an API operation name, not a W3C trace ID. The timeline uses `TotalTime`/`LastErrorMessage` for gateway rows and can link them through an actual tool audit record.
+
+LLM and hosted-agent message panels expose sensitive content already present in the workspace; they do not enable additional logging. The workbook does not deploy Sentinel/Defender, surface custom metric dimensions, or prove alert firing. Use the Azure Monitor metrics and Alerts views for those documented surfaces.
 
 ## Alerts
 
@@ -604,4 +663,4 @@ Next: [10 - Enterprise posture and scale](./10-enterprise-posture-and-scale.md) 
 
 ---
 
-*Last updated: 2026-10-02*
+*Last updated: 2026-10-15*

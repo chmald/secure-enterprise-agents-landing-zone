@@ -1,6 +1,7 @@
 // Question: who changed gateway, Foundry, Key Vault, Container Apps, or monitoring resources? Tables: AzureActivity.
-AzureActivity
+union isfuzzy=true
+    (datatable(TimeGenerated:datetime, Caller:string, OperationNameValue:string, ActivityStatusValue:string, ResourceGroup:string, ResourceProviderValue:string, ResourceId:string, CorrelationId:string, Properties:string)[]),
+    AzureActivity
 | where ResourceProviderValue in~ ("MICROSOFT.APIMANAGEMENT", "MICROSOFT.COGNITIVESERVICES", "MICROSOFT.APP", "MICROSOFT.KEYVAULT", "MICROSOFT.INSIGHTS", "MICROSOFT.OPERATIONALINSIGHTS")
 | project TimeGenerated, Caller, OperationNameValue, ActivityStatusValue, ResourceGroup, ResourceProviderValue, ResourceId, CorrelationId, Properties
 | order by TimeGenerated desc
-

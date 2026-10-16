@@ -1,12 +1,27 @@
-// Question: show every known hop for a trace or APIM correlation id. Tables: AppRequests, AppDependencies, AppTraces, ApiManagementGatewayLogs, ApiManagementGatewayMCPLog, ApiManagementGatewayLlmLog.
+// Question: show evidenced hops for a trace or APIM correlation id. Gateway rows link through tool_audit.gateway_request_id, not the API operation name.
 declare query_parameters(traceId:string = "");
+let ToolAudit =
+    union isfuzzy=true
+        (datatable(TimeGenerated:datetime, RawLog:string)[]),
+        (ContainerAppConsoleLogs_CL | project TimeGenerated, RawLog=tostring(Log_s)),
+        (AppTraces | project TimeGenerated, RawLog=tostring(Message))
+    | extend audit=parse_json(RawLog)
+    | where tostring(audit.event) == "tool_audit"
+    | project TimeGenerated, Source="tool_audit", Name=tostring(audit.tool), OperationId=tostring(audit.trace_id),
+        ParentId=tostring(audit.span_id), CorrelationId=tostring(audit.gateway_request_id),
+        Message=strcat(audit.decision, " ", audit.status_code), DurationMs=todouble(audit.latency_ms), Properties=audit;
+let GatewayIds = ToolAudit
+    | where isnotempty(traceId) and (OperationId == traceId or CorrelationId == traceId)
+    | where isnotempty(CorrelationId)
+    | distinct CorrelationId;
 union isfuzzy=true
+    ToolAudit,
     (AppRequests | project TimeGenerated, Source="AppRequests", Name, OperationId, ParentId, CorrelationId="", Message=tostring(Success), DurationMs=DurationMs, Properties),
     (AppDependencies | project TimeGenerated, Source="AppDependencies", Name, OperationId, ParentId, CorrelationId="", Message=tostring(Success), DurationMs=DurationMs, Properties),
     (AppTraces | project TimeGenerated, Source="AppTraces", Name=tostring(Properties["span.name"]), OperationId, ParentId, CorrelationId=tostring(Properties.gateway_request_id), Message, DurationMs=real(null), Properties),
-    (ApiManagementGatewayLogs | project TimeGenerated, Source="ApiManagementGatewayLogs", Name=ApiId, OperationId="", ParentId="", CorrelationId, Message=strcat(ResponseCode, " ", ErrorMessage), DurationMs, Properties=pack_all()),
-    (ApiManagementGatewayMCPLog | project TimeGenerated, Source="ApiManagementGatewayMCPLog", Name=ToolName, OperationId="", ParentId="", CorrelationId, Message=Error, DurationMs=real(null), Properties=pack_all()),
-    (ApiManagementGatewayLlmLog | project TimeGenerated, Source="ApiManagementGatewayLlmLog", Name=ModelName, OperationId="", ParentId="", CorrelationId, Message=strcat("tokens=", TotalTokens), DurationMs=real(null), Properties=pack_all())
-| where isempty(traceId) or OperationId == traceId or ParentId == traceId or CorrelationId == traceId or tostring(Properties.trace_id) == traceId
+    (ApiManagementGatewayLogs | project TimeGenerated, Source="ApiManagementGatewayLogs", Name=ApiId, OperationId="", ParentId="", CorrelationId, Message=strcat(ResponseCode, " ", LastErrorMessage), DurationMs=todouble(TotalTime), Properties=bag_pack("ApiId", ApiId, "LastErrorReason", LastErrorReason)),
+    (ApiManagementGatewayMCPLog | project TimeGenerated, Source="ApiManagementGatewayMCPLog", Name=ToolName, OperationId="", ParentId="", CorrelationId, Message=Error, DurationMs=real(null), Properties=bag_pack("ServerName", ServerName, "Method", Method, "SessionId", SessionId)),
+    (ApiManagementGatewayLlmLog | project TimeGenerated, Source="ApiManagementGatewayLlmLog", Name=ModelName, OperationId="", ParentId="", CorrelationId, Message=strcat("tokens=", TotalTokens), DurationMs=real(null), Properties=bag_pack("PromptTokens", PromptTokens, "CompletionTokens", CompletionTokens)),
+    (AppGenAIContent | project TimeGenerated, Source="AppGenAIContent", Name=AgentName, OperationId=TraceId, ParentId=ParentSpanId, CorrelationId="", Message=strcat("model=", ModelName), DurationMs=real(null), Properties=bag_pack("SpanId", SpanId, "AgentId", AgentId))
+| where isempty(traceId) or OperationId == traceId or ParentId == traceId or CorrelationId == traceId or tostring(Properties.trace_id) == traceId or CorrelationId in (GatewayIds)
 | order by TimeGenerated asc
-

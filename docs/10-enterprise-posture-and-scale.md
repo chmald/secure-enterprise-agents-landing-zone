@@ -60,6 +60,11 @@ Sources: [AI Gateway tier private networking](https://learn.microsoft.com/en-us/
 
 ## What `NETWORK_ISOLATION=true` deploys
 
+> [!IMPORTANT]
+> **Console access:** `ca-demo-console` shares the existing ACA environment. With `NETWORK_ISOLATION=true` that environment is **internal**, so the browser needs VNet/VPN connectivity and working private DNS in addition to deployer-only Entra sign-in. The console shows network topology for discussion/manual verification; it does not simulate live isolation checks. The [limited console live checks](./04-testing.md#live-follow-up-2026-10-16) do not validate isolated mode; that live validation remains pending.
+
+Console S4 is a separately confirmed, bounded burst (**1-120 requests**, **concurrency ≤8**, **≤90-second dispatch window**, **≤15-second request timeout**), not a capacity benchmark. Requests already underway may finish at the deadline; the console is limited to one replica and scales to zero. Inspect the selected gateway's detailed response/reason; a 429 alone does not identify token-limit, rate-limit or upstream policy origin. **No observed 429 = `not_run`, not `passed`.** Do not extrapolate a bounded demo to production scale.
+
 ![Opt-in](./assets/badges/opt-in.svg) ![Static only](./assets/badges/static-only.svg) The flag is read by `infra/main.bicep` and drives `modules/network.bicep`, `private-dns.bicep`, `private-endpoint.bicep`, `foundry-private.bicep`, `foundry-agent-byo*.bicep`, `aca-private-dns.bicep` and the network arguments of the Foundry, Key Vault, Container Apps and gateway modules. Subnet prefixes are the `*_SUBNET_PREFIX` variables in [doc 12](./12-configuration-reference.md). Validated with `az bicep build` and a `what-if` (127 resources, no errors); **not deployed live** - the v1.2 live run used the default public posture.
 
 | Resource | Setting when isolated | Deployed by the template |
@@ -240,4 +245,4 @@ Next: [11 - Demo walkthrough](./11-demo-walkthrough.md) →
 
 ---
 
-*Last updated: 2026-10-02*
+*Last updated: 2026-10-15*

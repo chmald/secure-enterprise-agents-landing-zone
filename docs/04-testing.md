@@ -14,6 +14,76 @@
 
 This page is for the engineer who has just deployed (or is about to deploy) the landing zone and needs to answer one question: **"is it actually working, and for which agent and gateway combination?"** It lays out the layers of verification from offline unit tests to live gateway probes, evaluations and red teaming, and shows what each layer proves and what it cannot.
 
+## Browser console acceptance checks
+
+**The console is deployed with limited live checks; the complete browser acceptance matrix is still pending.** The [2026-10-16 follow-up](#live-follow-up-2026-10-16) distinguishes observed behavior from remaining checks. Do not extend the historical 2026-10-02 pass matrix to it. After deployment, run the [browser walkthrough](./11-demo-walkthrough.md#browser-console-s1-s5) and record each result with its actual gateway, response details and trace ID.
+
+| Check | Expected behavior / evidence to collect |
+|---|---|
+| Sign-in boundary | Anonymous access requires Easy Auth sign-in; only the deploying human's tenant + object ID can use the console. Verify another same-tenant user is denied, not merely that a login page appears. Exercise ACA's `X-MS-CLIENT-PRINCIPAL-ID` header and the optional full claims header; missing identity, wrong owner/provider, malformed claims, and conflicting owner/tenant claims must be rejected. |
+| Secret boundary | Browser traffic/page source contains no app credential, managed-identity token or tier runtime key. Inspect locally without publishing secret-bearing captures. The backend uses SDK/HTTP clients, not CLI/scripts. |
+| Agent submissions | Choose MAF or LangGraph, enter a prompt, and explicitly confirm **every** submission. No request before confirmation; tools may mutate data even for an apparently read-only prompt. Responses invocation only, **no readiness GET**. Detailed response and trace ID are visible. A protocol success is not proof of selected-tool use. |
+| Routing | Agent requests keep deployed `HOSTED_DEFAULT_GATEWAY`; changing the direct gateway selector changes only direct S2-S4 checks. Displayed agent gateway is a **provisioning snapshot**, not live discovery. Agent-only deployment can leave it stale; reprovision to sync. Confirm actual routing in logs. |
+| S2 | Selected gateway returns 401 without credentials, then accepts a valid console-backend credential/model request. APIM uses console managed identity; tier uses a runtime key. Neither demonstrates OBO or agent identity. |
+| S3 MCP | Initialize, list tools and invoke catalog/records tools through the chosen gateway. JSON arguments derive from live `inputSchema`; inspect/adjust before submitting. `create_record` and `update_record` require explicit write confirmation; no automatic writes. |
+| S3 REST / denial | APIM-only records list/get/create/update with JSON arguments; writes confirmed separately. APIM denied-tool probe expects allowlist 403; distinguish that from unrelated 403s. Tier REST/denied-tool checks report `unavailable`, not equivalent coverage. |
+| S4 | Separate burst confirmation, 1-120 requests with concurrency at most 8; dispatch window ≤90 seconds, per-request timeout ≤15 seconds. Already-started requests can finish at the deadline. A returned 429 is evidence only for the selected gateway; do not infer token-limit versus upstream/rate-limit origin without logs. No observed 429 means `not_run`, not `passed`. |
+| S5 | Only saved KQL 01-11; API timespan one hour, appended `take 200`. Query 04 accepts trace ID. “Passed” means rows returned, not a validated audit assertion; empty results report `not_run` with ingestion/no-evidence guidance. No arbitrary KQL input. |
+| Manual / unavailable lanes | No simulated private-network checks; show topology and verify manually. OBO and optional ACA agent comparison remain manual/unavailable unless explicitly deployed. |
+| Isolated browser | With `NETWORK_ISOLATION=true`, access the internal ACA console using VNet/VPN connectivity and private DNS; public browser failure is not a live network-isolation pass. |
+
+### Console result semantics
+
+- **`passed`**: the specific executed check met its expected transport/protocol condition; for KQL it means **rows returned**, not that an audit assertion was validated. It is not a global security, tool-selection, trace-propagation or deployment-health verdict.
+- **`failed`**: the executed check returned an error or did not meet its expected condition; inspect the detailed response and gateway-specific reason.
+- **`unavailable`**: the path is unsupported or not deployed/configured, such as tier denied-tool parity or an optional manual runtime.
+- **`not_run`**: not executed, or evidence was not observed (including no 429 within the bounded burst and empty audit results). Do not turn missing evidence into a green check.
+
+Trace IDs surfaced in response headers are **advisory correlation handles**. Use query 04 and the source logs to verify propagation; an agent answer alone cannot prove a specific tool ran. Allow for ingestion delay and rerun bounded queries later.
+
+### Local console tests
+
+Use a supported **Python 3.12** virtual environment (the console image is `python:3.12-slim`), then install the backend test baseline:
+
+```powershell
+python -m pip install -r src\demo-console\requirements.txt pytest
+python -m pytest tests\test_demo_console.py tests\test_console_auth_hook.py -q
+```
+
+Backend tests use mocked services; hook tests execute mocked CLI scenarios in PowerShell. They do not create an Entra app, authenticate a real user or validate Azure deployment.
+
+For the optional synthetic UI test, install Playwright and have **Microsoft Edge** installed:
+
+```powershell
+python -m pip install playwright==1.58.0
+python -m pytest tests\test_demo_console_browser.py -q
+```
+
+The browser test uses a mocked runner and synthetic authentication context, **not Azure Easy Auth or live gateways**. It skips when Playwright is absent. A local UI pass is not proof of Azure sign-in, RBAC, network connectivity or deployment health; the acceptance checks above still need live execution.
+
+## Live follow-up (2026-10-16)
+
+These are scoped follow-up checks, **not** a new all-green S1-S5 matrix:
+
+| Surface | Observed / changed | Boundary |
+|---|---|---|
+| Console deployment and access | Ready Azure revision; `/healthz` returned 200; anonymous and forged-identity requests were rejected. Windows CLI setup, ID-token callback, ACA scalar headers/provider aliases and the allowed console origin were repaired. | This does not complete signed-in deployer/second-user browser acceptance or all application paths. |
+| AI Gateway tier tool path | Catalog and records discovery plus read-only tool calls succeeded from inside the console container after explicitly approved ACA-secret `env` key delivery. Key Vault public network access stayed disabled. | In-container execution is not an end-to-end browser check. It does not prove hosted-agent routing, tool selection, write behavior or APIM/tier policy parity. |
+| Console audit access | Bounded saved-query calls were exercised using the console managed identity. | Returned rows are evidence to inspect, not automatic audit assertions; empty sources are not passes. |
+| Workbook queries | All 17 persisted panels were exercised; the selected time range filters sources before joins/aggregation, and trace input remains optional and section-specific. | Query/API success alone does not verify portal rendering. |
+| Token chart contract | Workbook-style datetime expression expansion was tested; the old nested-datetime syntax error was reproduced. The corrected response schema is scalar `TimeGenerated: datetime`, `Tokens: long`, `Series: string`, not dynamic arrays. Seven days at three-hour buckets retained all **224 agent points**; 24-hour, finer-grained seven-day and empty windows preserved totals and scope. | Earlier screenshots exposed both JSON-array axes/zero metrics and parameter syntax failures. The final refreshed portal rendering after the scalar-row fix still requires visual confirmation. |
+| Other surfaces | Auth restrictions, private-vault settings and the other workbook panels were preserved during targeted repairs. | Full browser S1-S5 across both frameworks/gateways, isolated networking, OBO and production readiness are not claimed. |
+
+### Workbook visual acceptance
+
+1. Open the saved workbook from `WORKBOOK_ID`, not an unsaved older editing session. Overview shows the selected label, actual start/end and bucket size.
+2. Select **Last 24 hours**, **Last 7 days**, then a custom interval containing known requests. The time axis must show date/time ticks across that window, **not a JSON array label**. A window with no observations must show the no-data guidance.
+3. Each gateway/agent has separate `/ input` and `/ output` series. Compare their numeric legend totals against the corresponding source rows in Token usage details; **do not add gateway and agent observation layers together**. Different windows can legitimately have equal totals when they contain the same traffic.
+4. Inspect the chart query result schema: exactly datetime `TimeGenerated`, numeric long `Tokens`, and string `Series`. The intermediate `make-series` arrays must be expanded together before the chart receives them. Apply the 200-series limit **before** expansion, never a 200-point limit afterward.
+5. Enter a trace ID under Trace investigation. Only its timeline and hosted-agent content should narrow; Overview, message samples and coverage remain governed by the global time range. Hosted content uses W3C trace IDs, while the timeline also accepts APIM correlation IDs.
+
+The workbook and console have different time controls: the workbook defaults to 24 hours and supports presets/custom ranges; console S5 intentionally remains a fixed **one-hour** API query window. See [workbook deployment](./03-deployment.md#updating-only-the-workbook), [query/layout contract](./09-monitoring-and-audit.md#workbook), and [symptom fixes](./05-troubleshooting.md#browser-demo-console).
+
 ## At a glance
 
 | | Layer | Needs Azure? | Typical runtime | Proves |
@@ -220,4 +290,4 @@ A disposable deployment of v1.2.0 (environment `fhagl1002`) was provisioned and 
 
 Next: [05 - Troubleshooting](./05-troubleshooting.md) →
 
-*Last updated: 2026-10-02*
+*Last updated: 2026-10-15*

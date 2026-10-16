@@ -3,8 +3,8 @@ let AuditDenied =
     union isfuzzy=true
         (ContainerAppConsoleLogs_CL | project TimeGenerated, RawLog=tostring(Log_s)),
         (AppTraces | project TimeGenerated, RawLog=tostring(Message))
-    | where RawLog has '"event":"tool_audit"'
     | extend audit=parse_json(RawLog)
+    | where tostring(audit.event) == "tool_audit"
     | where tostring(audit.decision) == "denied"
     | project TimeGenerated, Source="tool_audit", CorrelationId=tostring(audit.gateway_request_id), Status=toint(audit.status_code), Reason=tostring(audit.reason), Tool=tostring(audit.tool);
 let GatewayDenied =

@@ -3,26 +3,28 @@
 let AgentContext =
     AppTraces
     | where Message has "agent_appid" or tostring(Properties.agent_appid) != ""
-    | project CorrelationId=tostring(Properties.gateway_request_id), agent_appid=tostring(Properties.agent_appid), user_oid=tostring(Properties.user_oid);
+    | project CorrelationId=tostring(Properties.gateway_request_id), agent_appid=tostring(Properties.agent_appid), user_oid=tostring(Properties.user_oid)
+    | where isnotempty(CorrelationId)
+    | summarize agent_appid=take_any(agent_appid), user_oid=take_any(user_oid) by CorrelationId;
 let ApimLlmLog =
     ApiManagementGatewayLlmLog
     | summarize PromptTokens=sum(PromptTokens), CompletionTokens=sum(CompletionTokens), Requests=count() by CorrelationId, ModelName
     | join kind=leftouter AgentContext on CorrelationId
     | summarize Requests=sum(Requests), PromptTokens=sum(PromptTokens), CompletionTokens=sum(CompletionTokens) by agent_appid, user_oid, ModelName
-    | extend Source="apim-standard-v2-llm-log";
+    | extend Source="apim-standard-v2-llm-log", agent_name="";
 let TierRequests =
     AppRequests
     | where AppRoleName startswith "aigw-" and Name has "/models/"
     | extend m=todynamic(Measurements)
     | summarize Requests=count(), PromptTokens=tolong(sum(todouble(m["gen_ai.usage.input_tokens"]))), CompletionTokens=tolong(sum(todouble(m["gen_ai.usage.output_tokens"])))
-    | extend Source="aigateway-tier-app-insights", agent_appid="", user_oid="", ModelName="";
+    | extend Source="aigateway-tier-app-insights", agent_appid="", agent_name="", user_oid="", ModelName="";
 let AgentSpans =
     AppDependencies
     | extend p=todynamic(Properties)
     | where tostring(p["gen_ai.operation.name"]) == "chat"
-    | summarize Requests=count(), PromptTokens=sum(tolong(p["gen_ai.usage.input_tokens"])), CompletionTokens=sum(tolong(p["gen_ai.usage.output_tokens"])) by agent_appid=tostring(p["gen_ai.agent.name"]), ModelName=tostring(p["gen_ai.request.model"])
-    | extend Source="hosted-agent-genai-span", user_oid="";
+    | summarize Requests=count(), PromptTokens=sum(tolong(p["gen_ai.usage.input_tokens"])), CompletionTokens=sum(tolong(p["gen_ai.usage.output_tokens"])) by agent_name=coalesce(tostring(p["gen_ai.agent.name"]), AppRoleName), ModelName=tostring(p["gen_ai.request.model"])
+    | extend Source="hosted-agent-genai-span", agent_appid="", user_oid="";
 union isfuzzy=true ApimLlmLog, TierRequests, AgentSpans
 | extend TotalTokens=PromptTokens + CompletionTokens
-| project Source, agent_appid, user_oid, ModelName, Requests, PromptTokens, CompletionTokens, TotalTokens
+| project Source, agent_appid, agent_name, user_oid, ModelName, Requests, PromptTokens, CompletionTokens, TotalTokens
 | order by TotalTokens desc

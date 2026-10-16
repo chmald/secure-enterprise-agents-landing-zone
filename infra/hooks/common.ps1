@@ -292,6 +292,8 @@ function Write-DemoIdsFile {
     param([Parameter(Mandatory = $true)][string]$Path)
     $ids = [ordered]@{
         resourceGroup = Get-EnvValue -Name "AZURE_RESOURCE_GROUP"
+        demoConsoleUrl = Get-EnvValue -Name "DEMO_CONSOLE_URL"
+        demoConsoleAppName = Get-EnvValue -Name "DEMO_CONSOLE_APP_NAME"
         foundryAccountName = Get-EnvValue -Name "FOUNDRY_ACCOUNT_NAME"
         foundryProjectName = Get-EnvValue -Name "FOUNDRY_PROJECT_NAME"
         foundryProjectEndpoint = Get-EnvValue -Name "FOUNDRY_PROJECT_ENDPOINT"

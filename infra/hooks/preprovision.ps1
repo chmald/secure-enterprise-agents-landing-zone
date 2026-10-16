@@ -1,4 +1,5 @@
 . "$PSScriptRoot\common.ps1"
+. "$PSScriptRoot\console-auth.ps1"
 
 $envName = Get-EnvValue -Name "AZURE_ENV_NAME"
 $location = Get-EnvValue -Name "AZURE_LOCATION" -Default "eastus2"
@@ -34,6 +35,7 @@ if ($network -eq "true") {
 
 $gatewayClientId = Ensure-GatewayAppRegistration -EnvironmentName $envName
 Write-Host "Gateway application client id: $gatewayClientId"
+Initialize-DemoConsoleAuth -EnvironmentName $envName
 
 Invoke-SoftDeletePrompts -EnvironmentName $envName -Location $location
 

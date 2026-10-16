@@ -3,8 +3,8 @@ let ToolAudit =
     union isfuzzy=true
         (ContainerAppConsoleLogs_CL | project TimeGenerated, RawLog=tostring(Log_s)),
         (AppTraces | project TimeGenerated, RawLog=tostring(Message))
-    | where RawLog has '"event":"tool_audit"'
     | extend audit = parse_json(RawLog)
+    | where tostring(audit.event) == "tool_audit"
     | project
         TimeGenerated,
         trace_id = tostring(audit.trace_id),
@@ -16,6 +16,8 @@ let ToolAudit =
         human_oid = tostring(audit.human_principal.oid),
         agent_appid = tostring(audit.agent_principal.appid),
         agent_oid = tostring(audit.agent_principal.oid),
+        gateway = tostring(audit.gateway),
+        caller = tostring(audit.caller),
         gateway_request_id = tostring(audit.gateway_request_id),
         status_code = toint(audit.status_code);
 let GatewayTools =
@@ -27,6 +29,5 @@ let Tokens =
 ToolAudit
 | join kind=leftouter GatewayTools on $left.gateway_request_id == $right.CorrelationId
 | join kind=leftouter Tokens on CorrelationId
-| project TimeGenerated, trace_id, human_oid, agent_appid, agent_oid, service, tool=coalesce(tool, ToolName), operation=coalesce(operation, Method), decision, reason, status_code, PromptTokens, CompletionTokens, TotalTokens, ServerName, TransportType
+| project TimeGenerated, trace_id, gateway_request_id, gateway, caller, human_oid, agent_appid, agent_oid, service, tool=coalesce(tool, ToolName), operation=coalesce(operation, Method), decision, reason, status_code, PromptTokens, CompletionTokens, TotalTokens, ServerName, TransportType
 | order by TimeGenerated desc
-

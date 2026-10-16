@@ -16,6 +16,45 @@
 
 A symptom-first guide for the failures you are most likely to hit while deploying and running the landing zone. Start with the quick-triage table, jump to the product section for detail, and use the escalation package at the bottom if you still need help.
 
+## Browser demo console
+
+> [!IMPORTANT]
+> The console is deployed with [limited live checks](./04-testing.md#live-follow-up-2026-10-16), not a completed browser acceptance matrix. Do not use the earlier script evidence as proof of console sign-in, RBAC or every workflow.
+
+| Symptom | Check / remedy |
+|---|---|
+| Preprovision stops on context | Match the intended azd environment's `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` to `az account show`; use tenant-explicit sign-in per [03 Phase 0](./03-deployment.md#phase-0---authenticate-to-the-right-tenant). Do not bypass the gate. |
+| `-o was unexpected at this time` followed by `Cannot check the console enterprise application` | Windows `az.cmd` can reinterpret parentheses in a JMESPath argument such as `length(@)` as batch syntax. The console hook uses `[0].id` instead. With the corrected hook, rerun `azd provision`; stored app-registration settings are reused, so no app or environment reset is needed. |
+| Cannot resolve deployer / service-principal login rejected | Sign in to Azure CLI as a **human** in the intended tenant. Setup resolves `AZURE_PRINCIPAL_ID` from that user; an app/client ID is not a user object ID. |
+| App/credential creation denied or auth inputs blank | Directory permissions to create/manage a separate single-tenant Entra app/credential are required. Verify setup populated `DEMO_CONSOLE_CLIENT_ID`, `DEMO_CONSOLE_ALLOWED_USER_ID`, and `DEMO_CONSOLE_CLIENT_SECRET` without printing the secret. Azure RBAC alone does not grant directory permissions. |
+| Redirect URI mismatch / sign-in loop | Check the console app (not the gateway app), target tenant and provisioned URL; rerun `azd provision` to configure the redirect in postprovision, then `azd deploy demo-console`. |
+| `401` at `/.auth/login/aad/callback` / ID token not enabled | Easy Auth requests the hybrid `code id_token` flow. The console Entra app must enable **ID tokens** under Authentication; implicit access-token issuance is not required. The provisioning hooks set `--enable-id-token-issuance true` for new apps and existing apps when configuring the callback. Keep the single-tenant setting and deployer allowlist unchanged. Retry sign-in after correcting the app setting. |
+| Signed in but denied | Use the deploying human's account. Easy Auth enforces the tenant and deployer allowlist; backend checks ACA's trusted `X-MS-CLIENT-PRINCIPAL-ID` and rejects conflicting claims when supplied. Do not require the full App Service-style claims header on ACA. The JSON `auth_reason` and categorical `console_access_denied` log identify missing identity, configuration, provider, owner, or tenant mismatches without revealing principal IDs or tokens. A second same-tenant user is not automatically allowed. |
+| `auth_reason: unexpected_identity_provider` after Entra sign-in | Update/redeploy the console's provider handling: Entra's `aad` and `azureActiveDirectory` names are aliases, while the full principal's `auth_typ` is an authentication type, not an identity-provider name. Do not compare all of these fields to the single literal `aad`, and do not remove the tenant/deployer-ID checks to get past this error. |
+| Console loads, but browser `POST /api/run` returns `403` without reaching app logs | Easy Auth has its own cookie-based CSRF check before FastAPI. The console auth configuration explicitly includes only its HTTPS `consoleUrl` in `login.allowedExternalRedirectUrls`. Check that value against the browser origin; `azd provision` applies this infrastructure setting, while `azd deploy demo-console` only updates the application. Keep the backend exact-origin/custom-header checks and deployer allowlist; do not disable CSRF or enable wildcard CORS. [Easy Auth CSRF behavior](https://learn.microsoft.com/azure/app-service/overview-authentication-authorization#mitigation-of-cross-site-request-forgery). |
+| Expired console app secret | Clear local `DEMO_CONSOLE_CLIENT_SECRET`, provision to append a new credential, then deploy the console. See [rotation](./03-deployment.md#console-secret-expiry-rotation-and-cleanup). Do not delete all app credentials blindly. |
+| Console URL inaccessible in isolated mode | `NETWORK_ISOLATION=true` uses the internal ACA environment. Browser needs VNet/VPN access and private DNS; signing in does not create network reachability. |
+| Hosted-agent request denied | Check **console managed identity** has **Azure AI User** at the Foundry **project** scope and allow RBAC propagation time. This is not the hosted agent's instance identity. |
+| Authenticated APIM direct check denied | Check console identity's **Cognitive Services User** at Foundry **account** scope and accepted audience `https://cognitiveservices.azure.com`. S2's deliberate no-credential request should still return 401. |
+| Tier key read fails | Check **Key Vault Secrets User** for the console identity, configured secret name and vault network reachability. `AIGW_KEY_DELIVERY=env` is an explicit demo-only opt-in delivered through an ACA secret; never paste the key into the browser. |
+| Log query denied / empty | Check **Log Analytics Reader** at workspace scope. Query 01-11 is last-hour/max-200 bounded; empty data reports `not_run`. Wait for ingestion or generate confirmed demo traffic; query 04 needs a matching trace ID. |
+| Workbook reports missing `DurationMs`, `PromptMessages`, or unset `traceId` | Deploy the corrected workbook, not just the console image. APIM gateway latency is `TotalTime`, while App Insights uses `DurationMs`; LLM messages may be `RequestMessages`/`ResponseMessages`. Workbook panels now bind the maintained saved KQL, and the trace input is optional (blank = recent hops). Reload the saved workbook from `WORKBOOK_ID`; discard an unsaved stale editing session. |
+| Workbook token charts show zero while the detail table has tokens, or the X-axis contains a JSON timestamp array | The chart received `make-series` dynamic arrays instead of scalar points. Expand timestamp/token arrays **together** with `mv-expand TimeGenerated to typeof(datetime), Tokens to typeof(long)`. Bind one numeric `Tokens` column, grouped by a `/ input` or `/ output` `Series`; do not treat parsing an array in a test as proof that the portal receives numeric columns. |
+| Token chart fails to parse at `)` after adding the selected start/end | Workbook KQL parameters already expand to datetime expressions. Use `{TimeRange:start}` / `{TimeRange:end}` directly; `datetime({TimeRange:start})` creates invalid nested syntax. Test Workbook-style expansion, not a raw ISO string substituted by a helper. |
+| Time range label changes but the graph still fits only the traffic hours | Filter source events before joins/aggregation, then fill the selected start/end/grain with `make-series`. Expand to typed scalar points for the chart; sparse `summarize` results alone allow the time axis to shrink. Keep the existing `timeContextFromParameter` binding. |
+| Seven-day chart loses early points or totals after flattening | A detail-table `take 200` was applied after point expansion. Limit intermediate **series** before `mv-expand` and retain every bucket; four series at three-hour intervals require **224** points over seven days. |
+| Trace input appears to leave other panels unchanged | Expected: it filters only Trace investigation's timeline and hosted-agent content. The time range applies globally. Console S5 is a separate fixed one-hour query window; it does not inherit workbook parameters. |
+| Agent answered but expected tool/audit is absent | Response success proves transport/protocol only. An agent may choose another/no tool; a response-header trace ID does not prove propagation. Verify source logs and query 04. |
+| Changing gateway dropdown did not reroute agent / display differs from logs | Expected: dropdown changes **direct checks only**. Agent routing is deployed `HOSTED_DEFAULT_GATEWAY`; console display is a **provisioning snapshot**, not live discovery. Change `AGENT_DEFAULT_GATEWAY`, reprovision to sync console config, and redeploy agents. Agent-only deploy can leave the snapshot stale. |
+| S1 is green but readiness was not checked | Expected: console S1 invokes Responses only; it does **not** issue a readiness GET. Verify readiness separately if required. |
+| S5 is green but rows do not prove the intended audit claim | Expected: “passed” means a fixed query returned rows. Inspect those rows yourself; it is not an automatically validated audit assertion. |
+| Write button does not run / tool arguments rejected | Confirm the specific direct write or agent submission. Refresh live MCP discovery and inspect its `inputSchema`/JSON args; no writes run automatically. Use disposable data. |
+| Burst has no 429 | `not_run`, not a pass: the bounded 1-120 calls, concurrency ≤8, did not observe throttling. Inspect the selected gateway's response/logs; do not attribute policy origin from a 429 alone. |
+| REST / denied-tool / OBO / ACA comparison unavailable | Direct REST and denied-tool probe are APIM-only; tier parity is not implemented. OBO and optional ACA agent comparison are manual/unavailable unless explicitly deployed. Do not replace them with fake results. |
+| Console app remains after `azd down` | Expected: Entra apps/credentials are not resource-group resources. Manually clean up the console app/credentials in the intended tenant and retire secret-bearing local azd state. |
+
+Keep tokens, keys, credentials, cookies and populated azd environment values out of screenshots, issue text and escalation logs. Inspect only redacted details when sharing failures.
+
 ## Decision tree
 
 [![Troubleshooting decision tree](./assets/troubleshooting-decision-tree.png)](./assets/troubleshooting-decision-tree.png)
@@ -171,4 +210,4 @@ If you need help, collect these (never include secrets):
 
 Next: [06 - Hosted agents explained](./06-hosted-agents-explained.md) →
 
-*Last updated: 2026-10-02*
+*Last updated: 2026-10-15*

@@ -306,6 +306,8 @@ output catalogMcpUrl string = '${aiGateway.properties.gatewayUrl}/default/toolse
 output recordsMcpUrl string = '${aiGateway.properties.gatewayUrl}/default/toolservers/${recordsToolServer.name}/mcp'
 output modelBaseUrl string = '${aiGateway.properties.gatewayUrl}/default/models/openai/v1'
 output runtimeKeyResourceId string = runtimeAccessKey.id
+@secure()
+output runtimeKey string = listSecrets('${aiGateway.id}/apiKeys/${runtimeKeyName}', apiVersion).primaryKey
 output runtimeKeySecretName string = runtimeKeySecretName
 output keyVaultName string = keyVaultName
 output keyVaultSecretUri string = runtimeKeySecret.properties.secretUri

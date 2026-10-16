@@ -23,11 +23,15 @@
 
 Architecture guide for platform engineers, solution architects, and developers who need to understand how two hosted-agent frameworks, two gateway families, tool backends, identity, and audit telemetry fit together. Read it before an architecture review or workshop so you can answer "where does this call go, who authenticated it, and where is it logged?" for every hop.
 
+> [!IMPORTANT]
+> The browser console is deployed with [limited live checks](./04-testing.md#live-follow-up-2026-10-16); the complete browser acceptance matrix remains pending. Existing 2026-10-02 evidence covers the previous script-driven paths only. It is a demo, not a production administration portal.
+
 ## At a glance
 
 | | Layer | In one sentence |
 |---|---|---|
 | <img src="./assets/icons/foundry-agent-service.svg" width="24" alt=""> | **Agents** | Two hosted agents (Microsoft Agent Framework, LangGraph) on the official Foundry hosts, with the same gateway-auth and telemetry contract. |
+| <img src="./assets/icons/container-apps.svg" width="24" alt=""> | **Console** | FastAPI + plain HTML/CSS/JS in `ca-demo-console`, in the existing ACA environment; deployer-only Entra sign-in, backend managed-identity clients. |
 | <img src="./assets/icons/api-management.svg" width="24" alt=""> | **Gateway (default)** | APIM Standard v2 validates Entra tokens, applies `llm-*` policies, allow-lists MCP tools, and logs to resource-specific tables. |
 | <img src="./assets/icons/ai-gateway.svg" width="24" alt=""> | **Gateway** <img src="./assets/badges/public-preview.svg" alt="Public preview"> | AI Gateway tier fronts the same model and tools with a gateway-scoped `api-key`; its LLM and MCP telemetry lands in Application Insights `AppRequests`. |
 | <img src="./assets/icons/container-apps.svg" width="24" alt=""> | **Tools** | `catalog-mcp` (native MCP) and `records-api` (REST, exposed as MCP) on Container Apps, port 8080. |
@@ -41,6 +45,23 @@ Architecture guide for platform engineers, solution architects, and developers w
 [![Reference architecture](./assets/foundry-hosted-agents-ai-gateway-landing-zone-architecture.png)](./assets/foundry-hosted-agents-ai-gateway-landing-zone-architecture.png)
 
 <sub>Editable source: [`assets/foundry-hosted-agents-ai-gateway-landing-zone-architecture.drawio`](./assets/foundry-hosted-agents-ai-gateway-landing-zone-architecture.drawio) - regenerate with `python scripts/export_diagrams.py docs/assets`.</sub>
+
+## Browser console boundary and request paths
+
+The `demo-console` azd service builds `src/demo-console` remotely with **repository-root Docker context** and deploys one Container App, `ca-demo-console`; it does not create a second ACA environment. It scales to zero with **maxReplicas=1**. FastAPI serves plain HTML/CSS/JS and calls Azure APIs directly through SDK/HTTP clients: **no CLI or scripts execute in the app**.
+
+| Hop | Identity / control | Limit of the claim |
+|---|---|---|
+| Browser → console | Separate single-tenant Entra console app; ACA Easy Auth requires authentication and allowlists the deploying human's object ID. Backend verifies the platform-injected principal ID and rejects conflicting owner/tenant claims when supplied. | This authenticates console access, not downstream user delegation. |
+| Console → hosted MAF / LangGraph | Backend managed identity; **Azure AI User** at the Foundry **project** scope; Responses invocation only. | No readiness GET. A successful response demonstrates transport/protocol success, not selected-tool execution or trace propagation. |
+| Console → APIM model / MCP / REST | Managed-identity token for `https://cognitiveservices.azure.com`; **Cognitive Services User** at the Foundry **account** scope. | These are console-identity checks, not agent-identity or OBO checks. REST list/get/create/update and the denied-tool probe are APIM-only. |
+| Console → AI Gateway tier model / MCP | Runtime key read from Key Vault (default `AIGW_KEY_DELIVERY=keyvault`). Opt-in `env` delivery uses an **ACA secret**, never browser JavaScript. | Key possession is not per-human/per-agent attribution; denied-tool allowlist parity is unavailable. |
+| Console → Log Analytics | **Log Analytics Reader** at the **workspace** scope; fixed saved KQL 01-11, API timespan one hour, appended `take 200`. | “Passed” means rows returned, not a validated audit assertion. Empty results are `not_run`. Query 04 accepts a trace ID; IDs are correlation hints until logs confirm the chain. |
+| Console → Key Vault | **Key Vault Secrets User** at the demo vault scope. | RBAC does not bypass network policy; a reachable vault is still required. |
+
+The browser's **direct gateway dropdown** selects only direct S2-S4 checks; it does not redeploy or switch agent routing. Hosted agents continue to use deployed `HOSTED_DEFAULT_GATEWAY`. The console displays a **provisioning snapshot**, not live-discovered agent routing: an agent-only deployment after changing `AGENT_DEFAULT_GATEWAY` can leave the display stale. Run `azd provision` to sync console configuration as well as redeploying agents. The console does not forward the browser's token or implement OBO. The OBO sample and optional ACA agent runtime remain manual/unavailable unless explicitly deployed.
+
+All agent prompts require confirmation because an agent may invoke mutating tools. Direct `create_record` / `update_record` and REST writes require explicit write confirmation; bounded throttle bursts have a separate confirmation. Nothing auto-runs writes. Network isolation is a diagram/manual discussion, not synthetic live checks. `NETWORK_ISOLATION=true` puts the console inside the internal ACA environment, requiring VNet/VPN browser access and private DNS.
 
 ## Gateway modes
 
@@ -58,7 +79,8 @@ Architecture guide for platform engineers, solution architects, and developers w
 
 | Tier | | Component | Mode / path | Role |
 |---|---|---|---|---|
-| Clients | <img src="./assets/icons/code.svg" width="20" alt=""> | **Demo walkthrough, OBO sample, validation scripts** | All | Invoke hosted agents and produce proof artifacts. |
+| Clients | <img src="./assets/icons/container-apps.svg" width="20" alt=""> | **Browser demo console** | `src/demo-console`; `ca-demo-console` in existing ACA environment | Deployer-only front door; managed-identity agent/gateway clients and bounded KQL. No OBO or in-app CLI. |
+| Clients | <img src="./assets/icons/code.svg" width="20" alt=""> | **Developer walkthrough, OBO sample, validation scripts** | Manual / separate | Retained developer paths; not executed by the console. |
 | Hosted agents | <img src="./assets/icons/foundry-agent-service.svg" width="20" alt=""> | **`agent-maf`** <br> <img src="./assets/badges/protocol.svg" alt="protocol"> | `src/agents/maf`, protocol `responses` 2.0.0 | Microsoft Agent Framework implementation on `agent_framework_foundry_hosting.ResponsesHostServer`, using gateway-backed model and MCP clients. |
 | Hosted agents | <img src="./assets/icons/foundry-agent-service.svg" width="20" alt=""> | **`agent-langgraph`** <br> <img src="./assets/badges/protocol.svg" alt="protocol"> | `src/agents/langgraph`, protocol `responses` 2.0.0 | LangGraph implementation on `langchain_azure_ai.agents.hosting.ResponsesHostServer`, using the same gateway contract. |
 | Gateway | <img src="./assets/icons/api-management.svg" width="20" alt=""> | **APIM Standard v2** <br> <img src="./assets/badges/ga.svg" alt="GA"> <img src="./assets/badges/default.svg" alt="Default"> | `AI_GATEWAY_MODE=apimv2` or `both` | Default GA gateway path with XML policy, Entra validation, managed identity to model, MCP/REST governance, diagnostics. |
@@ -226,4 +248,4 @@ Next: [02 - Prerequisites](./02-prerequisites.md) →
 
 ---
 
-*Last updated: 2026-10-02*
+*Last updated: 2026-10-15*

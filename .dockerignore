@@ -1,0 +1,13 @@
+**
+!src
+!src/demo-console
+!src/demo-console/**
+!config
+!config/profiles
+!config/profiles/*.json
+!infra
+!infra/monitoring
+!infra/monitoring/queries
+!infra/monitoring/queries/*.kql
+**/__pycache__
+**/*.pyc

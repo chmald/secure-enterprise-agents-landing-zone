@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Secure Agents | Demo Console</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+<header><div><span class="eyebrow">SECURE ENTERPRISE AGENTS LANDING ZONE</span><h1>Demo console</h1><p id="profile">Loading deployment configuration...</p></div><a href="/.auth/logout">Sign out</a></header>
+<main>
+  <aside class="notice"><strong>Testing and demonstration only.</strong> Use synthetic data. Calls use the console's managed identity or the preview gateway's runtime key, not your delegated identity. Hosted agents retain their own runtime identity. No client-side credentials.</aside>
+  <section class="panel selectors" aria-label="Deployment selection">
+    <label>Direct gateway<select id="gateway"><option value="apimv2">APIM Standard v2</option><option value="aigateway">AI Gateway tier (preview)</option></select></label>
+    <label>Hosted agent<select id="agent"><option value="maf">Microsoft Agent Framework</option><option value="langgraph">LangGraph</option></select></label>
+    <p id="agent-route"></p>
+  </section>
+  <nav aria-label="Walkthrough"><button data-step="S1">S1 Agents</button><button data-step="S2">S2 Identity</button><button data-step="S3">S3 Tools</button><button data-step="S4">S4 Limits</button><button data-step="S5">S5 Audit</button></nav>
+  <section class="panel" id="S1">
+    <h2>S1 / Hosted agents</h2><p>Invoke the selected framework on Foundry using the Responses contract. A successful response alone does not prove tool use, readiness endpoint health, or end-to-end trace propagation.</p>
+    <label>Domain walkthrough prompt<select id="prompt-preset"><option value="">Custom prompt</option></select></label>
+    <label>Agent prompt<textarea id="prompt" rows="4" maxlength="4000">List the governed tools you can use.</textarea></label>
+    <label class="check"><input type="checkbox" id="agent-confirm"> I authorize this agent invocation, including any tool side effects and model cost.</label>
+    <button data-action="agent">Invoke hosted agent</button>
+  </section>
+  <section class="panel" id="S2" hidden>
+    <h2>S2 / Authentication paths</h2><p>No credential should return exactly 401. The authenticated direct-model path demonstrates console identity (APIM) versus possession of a gateway runtime key (preview tier). Inspect S5 to verify the actual principal.</p>
+    <button data-action="unauthenticated">Check no-credential denial</button><button data-action="model">Call model with console credentials</button>
+    <p>Human on-behalf-of and hosted-agent instance identity are different paths. This console does not implement OBO.</p>
+  </section>
+  <section class="panel" id="S3" hidden>
+    <h2>S3 / Governed tools and REST</h2>
+    <div class="selectors"><label>MCP server<select id="server"><option value="catalog">Catalog / native MCP</option><option value="records">Records / REST-as-MCP</option></select></label><button data-action="mcp-list">Connect and discover tools</button></div>
+    <label>Live tool<select id="tool"><option value="">Discover tools first</option></select></label>
+    <label>Arguments (JSON; populated from the live input schema)<textarea id="arguments" rows="8">{}</textarea></label>
+    <details><summary>Live tool schema</summary><pre id="schema">No tools discovered.</pre></details>
+    <label class="check"><input id="write-confirm" type="checkbox"> I authorize this record creation/update using synthetic demo data.</label>
+    <button data-action="mcp-call">Call selected MCP tool</button><button data-action="denied-tool">Probe denied tool (APIM only)</button>
+    <h3>REST route (APIM only)</h3><p>Uses the same records backend through the APIM REST facade. Create/update use the JSON arguments above. The demo backend keeps records in memory; restarting it resets changes.</p>
+    <label>Record ID (get/update)<input id="record-id" maxlength="100" placeholder="Copy an ID from list records"></label>
+    <button data-action="rest-list">List records</button><button data-action="rest-get">Get record</button><button data-action="rest-create">Create record</button><button data-action="rest-update">Update record</button>
+  </section>
+  <section class="panel" id="S4" hidden>
+    <h2>S4 / Bounded throttle probe</h2><p>At most 120 requests over a 90-second dispatch window, concurrency at most 8, with a small output budget. An observed 429 does not identify the policy that caused it; inspect gateway logs. No 429 within budget is not a pass. Only one probe runs at a time per replica.</p>
+    <label>Request budget<input id="attempts" type="number" min="1" max="120" value="24"></label>
+    <label class="check"><input id="throttle-confirm" type="checkbox"> I approve this bounded burst and its model cost; it may throttle other demo traffic.</label>
+    <button data-action="throttle">Run bounded probe</button>
+    <h3>Network isolation / optional runtime comparison</h3><p>Use the deployment's network topology documentation to discuss private paths. This console does not claim a live network-isolation check or deploy/switch the optional ACA-hosted agent.</p>
+  </section>
+  <section class="panel" id="S5" hidden>
+    <h2>S5 / Audit and trace evidence</h2><p>Run a saved query over the last hour, capped at 200 rows per table. Ingestion can lag. Returned rows need interpretation: neither row presence nor the outgoing trace ID alone proves an end-to-end audit pass.</p>
+    <label>Saved KQL query<select id="query"><option>01</option><option>02</option><option>03</option><option>04</option><option>05</option><option>06</option><option>07</option><option>08</option><option>09</option><option>10</option><option>11</option></select></label>
+    <label>Trace ID (query 04; copied from latest call)<input id="trace-id" maxlength="32" pattern="[0-9a-f]{32}" placeholder="32 lowercase hexadecimal characters"></label>
+    <button data-action="audit">Run saved query</button>
+  </section>
+  <section class="panel results" aria-live="polite" aria-busy="false">
+    <h2>Live result <span id="status" class="status">not_run</span></h2><p id="summary">Choose a workflow. Nothing runs automatically.</p>
+    <pre id="result">No request made.</pre>
+    <details><summary>Session history (browser memory only)</summary><ol id="history"></ol></details>
+  </section>
+</main>
+<footer>GA APIM path / Public-preview AI Gateway path. Application validation is separate from the original demo's historical live evidence.</footer>
+</body>
+</html>

@@ -17,12 +17,15 @@
 
 A shareable presenter script for the hosted-agent and AI gateway landing zone. The story runs as a **matrix**: two agent frameworks (Microsoft Agent Framework and LangGraph) against two gateway targets (APIM v2 and the AI Gateway tier), through five steps, **S1 to S5**, that end in the audit trail.
 
+> [!IMPORTANT]
+> **Present with the browser console; limited live checks do not replace complete acceptance.** See the [2026-10-16 follow-up](./04-testing.md#live-follow-up-2026-10-16). The badges and 2026-10-02 matrix below describe earlier **script-driven** runs, not a console pass matrix. Use [deployment](./03-deployment.md#demo-console-provisioning-and-sign-in) once, then open `DEMO_CONSOLE_URL`; no local demo scripts are needed during presentation.
+
 ## At a glance
 
 | | Item | Detail |
 |---|---|---|
 | <img src="./assets/icons/foundry-agent-service.svg" width="24" alt=""/> | **Audience** | Platform, security and application owners deciding how to govern agents. |
-| <img src="./assets/icons/code.svg" width="24" alt=""/> | **Driver** | `scripts/demo_walkthrough.py`, with `--dry-run` for rehearsal and `--step` to jump to a segment. |
+| <img src="./assets/icons/container-apps.svg" width="24" alt=""/> | **Driver** | Browser at `DEMO_CONSOLE_URL`, signed in as the deploying human. Scripts below remain a separate developer/rehearsal path. |
 | <img src="./assets/icons/log-analytics.svg" width="24" alt=""/> | **Closing proof** | Audit query 01 and trace query 04 in Log Analytics ([doc 09](./09-monitoring-and-audit.md)). |
 | <img src="./assets/icons/ai-gateway.svg" width="24" alt=""/> | **Preview lane** | AI Gateway tier steps are ![Public preview](./assets/badges/public-preview.svg) and were run live on 2026-10-02; present them as a comparison, not a recommendation. |
 
@@ -31,6 +34,71 @@ A shareable presenter script for the hosted-agent and AI gateway landing zone. T
 [![Demo walkthrough story](./assets/demo-walkthrough-story.png)](./assets/demo-walkthrough-story.png)
 
 <sub>Editable source: [`assets/demo-walkthrough-story.drawio`](./assets/demo-walkthrough-story.drawio) - regenerate with `python scripts/export_diagrams.py docs/assets`.</sub>
+
+## Browser console S1-S5
+
+### Before presenting
+
+- Deploy with `azd up`, or update an existing environment with `azd provision` then `azd deploy records-api demo-console` to ship the REST collection-routing fix alongside the console. Local CLI provisioning is still required; the app never shells out to CLI/scripts.
+- Sign in as the **deploying human**. Single-tenant Easy Auth plus its deployer-object-ID allowlist gates access; the backend verifies ACA's platform-injected principal ID and rejects conflicting claims when supplied. A second user in the same tenant is not automatically allowed.
+- If `NETWORK_ISOLATION=true`, use a browser connected to the VNet/VPN with working private DNS: the console shares the internal ACA environment.
+- Use only disposable sample data. **Every agent submission requires confirmation**, because an agent can choose mutating tools regardless of how harmless the prompt sounds. Confirm direct writes and throttle bursts separately. No writes run automatically.
+- Show the **agent gateway provisioning snapshot** (`HOSTED_DEFAULT_GATEWAY`) separately from the **direct gateway selector**. The selector changes direct checks only; it does not reroute MAF/LangGraph. This is not live discovery: changing `AGENT_DEFAULT_GATEWAY` with an agent-only deploy can leave the console stale. Run `azd provision` to sync console config as well as redeploying agents; verify routing in logs.
+- Keep detailed responses and trace IDs visible, but never expose credentials, cookies or populated azd environment values in a recording.
+
+### S1 — Submit a real hosted-agent prompt
+
+Choose **MAF** or **LangGraph**, enter a prompt for the demo profile, review it, confirm potential tool/data changes, and submit. Repeat with the other framework if desired. **S1 invokes Responses only; it does not issue a readiness GET.** Inspect the returned response and status rather than just HTTP 200 (the host can include a failed status inside a successful HTTP response).
+
+**Say:** “This response demonstrates the hosted transport/protocol path for the selected framework. The agent uses its deployed gateway configuration.” It does **not** prove a specific tool was selected, that all calls used the dropdown's gateway, or that `traceparent` propagated. Verify actual tool use and correlation in logs at S5. Header trace IDs are advisory handles, not propagation proof.
+
+### S2 — Compare missing credentials with a backend-authenticated model call
+
+Select a deployed **direct gateway**, run its no-credential probe, and inspect the expected **401**. Then run the authenticated model request and show its detailed response.
+
+| Direct gateway | Credential used by the backend | What it demonstrates |
+|---|---|---|
+| APIM v2 | Console managed-identity token, audience `https://cognitiveservices.azure.com` | Console identity is accepted by APIM; not the agent identity and not the signed-in human via OBO. |
+| AI Gateway tier | Gateway-scoped runtime key, from Key Vault by default (ACA secret with opt-in `env` delivery) | Possession of a valid runtime key; no per-human/per-agent identity claim. |
+
+Browser sign-in protects console access only. The browser never receives downstream keys/tokens. OBO remains a separate manual sample, not an implemented browser operation.
+
+### S3 — Discover tools, then invoke explicitly
+
+1. Select **catalog** or **records** MCP on the chosen direct gateway. Initialize the MCP session and list tools; inspect the actual names and live `inputSchema`.
+2. Choose a discovered tool. The console generates JSON arguments from that live schema; inspect and edit values before invoking. Do not assume tool names match between gateways.
+3. For known mutating tools **`create_record` / `update_record`**, explicitly check the write-confirmation box. Use sample records only. No discovery action or page load automatically invokes a write.
+4. For direct **REST**, use **APIM only**: list/get/create/update records with JSON arguments. The gateway collection URL is **`/records/`**, not `/records/records`. Review record identifiers and confirm creates/updates separately.
+5. On **APIM only**, run the denied-tool probe and inspect the expected **403 allowlist denial**. An unrelated 403 is not proof of that policy. On the tier this probe is **`unavailable`**; do not claim equivalently supported allowlist enforcement.
+
+Direct MCP/REST calls show direct protocol behavior, not what the agent chose to do in S1. Use S5 to check the audit trail. REST and denied-tool APIM-only controls must not be presented as tier parity.
+
+### S4 — A bounded throttle probe, plus a manual posture discussion
+
+Review and explicitly confirm the burst: **1-120 calls**, **concurrency ≤8**, a **≤90-second dispatch window** and **≤15-second per-request timeout**. Requests already underway may finish at the dispatch deadline; not all requested attempts must run. One console replica is configured. This consumes model capacity and can cause throttling/cost. Show detailed responses and the selected gateway's reason.
+
+- Observed **429** is evidence that throttling occurred on this request path; do **not** infer whether the source was token limits, request-rate limits or an upstream service without logs.
+- **No observed 429 = `not_run`, not `passed`.** The bounded burst did not establish the throttle condition; do not automatically increase the load or repeat indefinitely.
+- For network posture, show the [network topology](./10-enterprise-posture-and-scale.md#the-network-path) and explain deployed/manual validation boundaries. The console does **not** manufacture private-link or network-isolation live checks.
+
+### S5 — Run bounded saved KQL and inspect actual evidence
+
+Choose a saved query **01-11** (fixed allowlist; no arbitrary KQL), run it, and display the returned rows and trace ID. The console sets a **one-hour timespan on the query API** and appends **`take 200`**. **“Passed” means rows returned, not a validated audit assertion**; inspect the contents to establish evidence.
+
+- Start with **01** (tool audit), then **04** with the relevant trace ID. **11** compares tier telemetry in `AppRequests` with APIM evidence.
+- A response-header trace ID is advisory: inspect returned spans/audit rows to verify correlation; missing joins must not be described as propagated.
+- **Empty results = `not_run`**, with ingestion-delay/no-evidence guidance. Wait a few minutes and rerun; absence of rows is not an audit success.
+- Workbooks/alerts remain portal surfaces. OBO and the optional ACA agent comparison remain manual/unavailable unless explicitly deployed; no simulated result substitutes for them.
+- In the workbook, start with the two token charts, then use the labeled evidence sections. Its time range is global; trace input is local to Trace investigation. Check numeric `/ input` and `/ output` totals and real date/time ticks, not JSON array labels. The workbook is separate from console S5's fixed one-hour query window. Use the [visual acceptance checklist](./04-testing.md#workbook-visual-acceptance) before presenting.
+
+### Reading the console status
+
+Each operation shows detailed response data and one of **`passed`**, **`failed`**, **`unavailable`**, **`not_run`**. A pass applies to that operation's observed transport/protocol condition only. Failure needs response/log inspection; unavailable means unsupported/not deployed; not_run includes skipped or unobserved evidence. Do not turn unavailable or missing evidence into green “end-to-end security” claims.
+
+## Developer/script path (separate from the console)
+
+> [!NOTE]
+> The remaining run-of-show, command matrix and live evidence retain the earlier script workflow. They do not describe code executed by the console, and optional OBO/ACA steps require their own deployment and manual execution.
 
 ## Run of show
 
@@ -51,7 +119,7 @@ About 40 minutes with questions. Skip S4 to get to 30.
 
 ## The agent by gateway matrix
 
-Each cell is one rehearsal command. Dry-run and live runs are both verified; results are in the [live evidence](#live-evidence) section.
+Each cell is one script rehearsal command. Historical dry-run/live verification is from 2026-10-02; results are in [live evidence](#live-evidence). This is not a browser-console validation matrix.
 
 | Agent | Gateway | Dry run | Live |
 |---|---|---|---|
@@ -151,6 +219,8 @@ Step values are `S1` to `S5` and `smoke`. Defaults are `--agent maf` and `--gate
 
 ## Live evidence
 
+**Historical script evidence only — not validation of the new console or its auth/RBAC/deployment hooks.**
+
 ![live-tested](./assets/badges/live-tested.svg) for **both gateway lanes** and **both agents**. Run `fhagl1002` on 2026-10-02 in `eastus2`; details and defects in [04 - Testing](./04-testing.md#live-validation-2026-10-02).
 
 [![Pass/fail matrix for walkthrough steps S1 to S5, by agent host and gateway lane](./assets/evidence/pass-fail-matrix.png)](./assets/evidence/pass-fail-matrix.png)
@@ -174,4 +244,4 @@ Next: [12 - Configuration reference](./12-configuration-reference.md) →
 
 ---
 
-*Last updated: 2026-10-02*
+*Last updated: 2026-10-15*

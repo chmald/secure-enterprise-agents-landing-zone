@@ -8,7 +8,7 @@ let Tier =
     | summarize Requests=count(), Failed=countif(Success == false), InputTokens=tolong(sum(todouble(m["gen_ai.usage.input_tokens"]))), OutputTokens=tolong(sum(todouble(m["gen_ai.usage.output_tokens"]))), AvgDurationMs=avg(DurationMs) by Gateway="aigateway-tier", Surface, Route=Name, TimeGenerated=bin(TimeGenerated, 1h);
 let TierMcp =
     ApiManagementGatewayMCPLog
-    | summarize Requests=count(), Failed=countif(isnotempty(Error)), InputTokens=long(0), OutputTokens=long(0), AvgDurationMs=real(null) by Gateway="aigateway-tier-mcp-log", Surface="mcp", Route=strcat(McpServerEndpoint, " ", Method), TimeGenerated=bin(TimeGenerated, 1h);
+    | summarize Requests=count(), Failed=countif(isnotempty(Error)), InputTokens=long(null), OutputTokens=long(null), AvgDurationMs=real(null) by Gateway="mcp-resource-log", ResourceId=tostring(_ResourceId), Surface="mcp", Route=strcat(McpServerEndpoint, " ", Method), TimeGenerated=bin(TimeGenerated, 1h);
 let StandardV2 =
     ApiManagementGatewayLlmLog
     | summarize Requests=count(), Failed=long(0), InputTokens=sum(tolong(PromptTokens)), OutputTokens=sum(tolong(CompletionTokens)), AvgDurationMs=real(null) by Gateway="apim-standard-v2", Surface="llm", Route=strcat("model=", ModelName), TimeGenerated=bin(TimeGenerated, 1h);
@@ -18,5 +18,5 @@ let AgentSpans =
     | where isnotempty(tostring(p["gen_ai.operation.name"]))
     | summarize Requests=count(), Failed=countif(Success == false), InputTokens=sum(tolong(p["gen_ai.usage.input_tokens"])), OutputTokens=sum(tolong(p["gen_ai.usage.output_tokens"])), AvgDurationMs=avg(DurationMs) by Gateway=strcat("hosted-agent:", AppRoleName), Surface=tostring(p["gen_ai.operation.name"]), Route=tostring(p["gen_ai.request.model"]), TimeGenerated=bin(TimeGenerated, 1h);
 union isfuzzy=true Tier, TierMcp, StandardV2, AgentSpans
-| project TimeGenerated, Gateway, Surface, Route, Requests, Failed, InputTokens, OutputTokens, AvgDurationMs
+| project TimeGenerated, Gateway, Surface, Route, ResourceId, Requests, Failed, InputTokens, OutputTokens, AvgDurationMs
 | order by TimeGenerated desc, Gateway asc, Surface asc

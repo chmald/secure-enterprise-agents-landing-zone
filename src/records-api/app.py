@@ -82,6 +82,7 @@ def call_tool(name: str, args: dict[str, Any]) -> Any:
 @app.get("/healthz")
 def healthz(): return {"status":"ok","service":SERVICE_NAME,"domain_profile":PROFILE["profileName"],"records_loaded":len(records())}
 
+@app.get("/records/", response_model=list[Record], include_in_schema=False)
 @app.get("/records", response_model=list[Record], operation_id="list_records", summary=summaries["list_records"])
 def list_records(status_filter: Literal["open","in_progress","completed","cancelled"]|None=Query(default=None, alias="status"), priority: Literal["low","medium","high","critical"]|None=None, assigned_to: str|None=None, location: str|None=None):
     result=records()
@@ -94,6 +95,7 @@ def list_records(status_filter: Literal["open","in_progress","completed","cancel
 @app.get("/records/{record_id}", response_model=Record, operation_id="get_record", summary=summaries["get_record"])
 def get_record(record_id: str): return find_record(record_id)[1]
 
+@app.post("/records/", response_model=Record, status_code=status.HTTP_201_CREATED, include_in_schema=False)
 @app.post("/records", response_model=Record, status_code=status.HTTP_201_CREATED, operation_id="create_record", summary=summaries["create_record"])
 def create_record(payload: RecordCreate):
     now=datetime.now(UTC); record=Record(id=next_record_id(), created_at=now, updated_at=now, **payload.model_dump()); records().append(record); return record

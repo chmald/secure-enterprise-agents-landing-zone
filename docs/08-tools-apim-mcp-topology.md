@@ -45,11 +45,15 @@ An agent is only as useful, and only as safe, as the tools it can reach. This pa
 
 ## Topology: where each path goes
 
+The [browser console S3](./11-demo-walkthrough.md#s3--discover-tools-then-invoke-explicitly) exercises these routes **directly** using its backend credentials, not the agent's tool-choice flow. It initializes MCP, lists tools, and generates editable JSON arguments from the selected tool's live `inputSchema`. Known writes `create_record` / `update_record` require an explicit confirmation checkbox; every agent submission is also confirmed because agents may mutate data.
+
+Console REST list/get/create/update and the **403 allowlist denied-tool probe are APIM-only**. The tier reports these checks `unavailable`; do not imply equivalent denial-policy coverage. Discovery itself does not run writes. Inspect detailed responses and logs; agent response success alone does not prove a specific tool ran. Tier discovery/read calls were spot-checked from inside the console container; the [full browser matrix remains pending](./04-testing.md#live-follow-up-2026-10-16).
+
 | | Lane | Tool | Gateway path | Credential |
 |---|---|---|---|---|
 | <img src="./assets/icons/api-management.svg" width="20" alt="API Management"/> | APIM v2 | Catalog MCP | `/catalog-mcp/mcp` | Entra bearer (validated) |
 | <img src="./assets/icons/api-management.svg" width="20" alt="API Management"/> | APIM v2 | Records MCP | `/records-mcp/mcp` | Entra bearer (validated) |
-| <img src="./assets/icons/api-management.svg" width="20" alt="API Management"/> | APIM v2 | Records REST | `/records` | Entra bearer (validated) |
+| <img src="./assets/icons/api-management.svg" width="20" alt="API Management"/> | APIM v2 | Records REST | `/records/` (not `/records/records`) | Entra bearer (validated) |
 | <img src="./assets/icons/ai-gateway.svg" width="20" alt="AI Gateway"/> | AI Gateway tier | Catalog MCP | `/default/toolservers/catalog-mcp/mcp` | `api-key` runtime key |
 | <img src="./assets/icons/ai-gateway.svg" width="20" alt="AI Gateway"/> | AI Gateway tier | Records MCP | `/default/toolservers/records/mcp` | `api-key` runtime key |
 
@@ -168,4 +172,4 @@ Both frameworks in this repo use Streamable HTTP, which is also what the gateway
 
 Next: [09 - Monitoring and audit](./09-monitoring-and-audit.md) →
 
-*Last updated: 2026-10-02*
+*Last updated: 2026-10-15*

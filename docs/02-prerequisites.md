@@ -68,6 +68,11 @@ Skip this step only when you deploy with `AI_GATEWAY_MODE=apimv2`.
 
 ## RBAC and identities
 
+> [!IMPORTANT]
+> **Console setup requires a human Azure CLI login**, even if the historical infrastructure path could use a pipeline principal. After verifying tenant/subscription, preprovision resolves that user's object ID into `AZURE_PRINCIPAL_ID` and the console allowlist, creates a separate single-tenant Entra app and generates its credential. Directory permission to create/manage apps and credentials is required; Azure subscription RBAC alone is insufficient. Deployment/auth repairs and remaining browser acceptance checks are recorded in the [2026-10-16 follow-up](./04-testing.md#live-follow-up-2026-10-16).
+
+The console backend managed identity additionally needs **Azure AI User** at the Foundry **project**, **Cognitive Services User** at the Foundry **account**, **Log Analytics Reader** at the **workspace**, and **Key Vault Secrets User** at the **vault**. These are distinct from the browser user and agent instance identities. Setup/rotation: [03](./03-deployment.md#demo-console-provisioning-and-sign-in). An isolated console requires a VNet/VPN-connected browser and private DNS, not merely Entra sign-in.
+
 | | Principal | Role | Scope | Why |
 |---|---|---|---|---|
 | <img src="./assets/icons/entra-roles.svg" width="20" alt=""> | **Deploying user / pipeline** | Owner, or Contributor + User Access Administrator | Subscription (or demo resource group) | Creates resources and role assignments. |
@@ -259,4 +264,4 @@ Next: [03 - Deployment](./03-deployment.md) →
 
 ---
 
-*Last updated: 2026-10-02*
+*Last updated: 2026-10-15*

@@ -49,6 +49,12 @@ if (Test-AiGatewayTierEnabled -Mode $AiGatewayMode) {
 }
 
 $templateFile = Join-Path $PSScriptRoot "azd.bicep"
+$consoleClientId = Get-EnvValue -Name "DEMO_CONSOLE_CLIENT_ID"
+$consoleOwnerId = Get-EnvValue -Name "DEMO_CONSOLE_ALLOWED_USER_ID"
+$consoleSecret = Get-EnvValue -Name "DEMO_CONSOLE_CLIENT_SECRET"
+if (-not $consoleClientId -or -not $consoleOwnerId -or -not $consoleSecret) {
+    throw "Console authentication is required. Run azd provision (which configures deployer-only Entra access), or provide DEMO_CONSOLE_CLIENT_ID, DEMO_CONSOLE_ALLOWED_USER_ID and DEMO_CONSOLE_CLIENT_SECRET."
+}
 $parameters = @(
     "environmentName=$EnvironmentName",
     "location=$AzureLocation",
@@ -63,6 +69,11 @@ $parameters = @(
     "apimPublisherEmail=$ApimPublisherEmail",
     "apimPublisherName=$ApimPublisherName",
     "gatewayAppClientId=$GatewayAppClientId",
+    "demoConsoleClientId=$consoleClientId",
+    "demoConsoleAllowedUserId=$consoleOwnerId",
+    "demoConsoleClientSecret=$consoleSecret",
+    "agentDefaultGateway=$(Get-EnvValue -Name 'AGENT_DEFAULT_GATEWAY' -Default 'apimv2')",
+    "aigwKeyDelivery=$(Get-AiGatewayKeyDelivery)",
     "tokenLimitTpmPerAgent=$TokenLimitTpmPerAgent",
     "aigwRequestLimitRpm=$AigwRequestLimitRpm",
     "aigwRuntimeKeySecretName=$AigwRuntimeKeySecretName",

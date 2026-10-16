@@ -22,8 +22,8 @@ The complete configuration index for the demo. If a value is configurable, gener
 
 | | Layer | What it holds |
 |---|---|---|
-| <img src="./assets/icons/subscription.svg" width="24" alt=""/> | **azd environment** | 40 input variables (target, gateway, network, model, workload, monitoring) plus the opt-in `AIGW_KEY_DELIVERY` and `AIGW_RUNTIME_KEY` agent settings. |
-| <img src="./assets/icons/resource-group.svg" width="24" alt=""/> | **azd outputs** | 29 outputs, mirrored into `demo-ids.local.json` by the postprovision hook. |
+| <img src="./assets/icons/subscription.svg" width="24" alt=""/> | **azd environment** | Target, gateway, network, model, workload, monitoring and console sign-in inputs, plus opt-in runtime-key delivery settings. |
+| <img src="./assets/icons/resource-group.svg" width="24" alt=""/> | **azd outputs** | Resource outputs below; console URL/app name are azd outputs. Only the explicitly mapped subset goes to `demo-ids.local.json`. |
 | <img src="./assets/icons/foundry-agent-service.svg" width="24" alt=""/> | **Runtime environment** | Per-component variables for hosted agents, tool backends, scripts, hooks and tests. |
 | <img src="./assets/icons/code.svg" width="24" alt=""/> | **Domain profile JSON** | Labels, agent instructions, tool descriptions, seed data and walkthrough prompts. |
 
@@ -60,9 +60,27 @@ Set a value with `azd env set <NAME> <value>`. Defaults come from `infra/azd.par
 | `AZURE_LOCATION` | `eastus2` recommended ![live-tested](./assets/badges/live-tested.svg) | Primary region; the v1.2 live run used `eastus2`. |
 | `AZURE_SUBSCRIPTION_ID` | azd-provided | Subscription target. Keep it explicit when you work across tenants. |
 | `AZURE_TENANT_ID` | azd-provided | Tenant target. |
-| `AZURE_PRINCIPAL_ID` | azd-provided | Deployment principal. |
+| `AZURE_PRINCIPAL_ID` | Resolved by preprovision | Signed-in Azure CLI **human user** object ID; console deployer allowlist uses this identity. App/service-principal logins are rejected for console setup. |
 | `AZURE_PRINCIPAL_TYPE` | `User` | Role assignment principal type. |
 | `AZURE_RESOURCE_GROUP` | Blank | Reuse an existing resource group, or create `rg-<env>`. |
+
+### <img src="./assets/icons/container-apps.svg" width="28" alt=""/> Demo console sign-in
+
+These azd inputs default blank and are populated by setup, not committed values. Before setup operations, `preprovision` verifies the active tenant/subscription, resolves the human deployer and ensures a **separate single-tenant console Entra app**. Missing inputs fail closed. See [provisioning/rotation](./03-deployment.md#demo-console-provisioning-and-sign-in).
+
+| azd variable | Bicep parameter | Default | Purpose |
+|---|---|---|---|
+| `DEMO_CONSOLE_CLIENT_ID` | `demoConsoleClientId` | Blank | Console Entra app client ID; distinct from `GATEWAY_APP_CLIENT_ID`. Hook creates the app when needed. |
+| `DEMO_CONSOLE_ALLOWED_USER_ID` | `demoConsoleAllowedUserId` | Blank | Deploying human's object ID, resolved from the signed-in Azure CLI user; Easy Auth allowlist plus backend `oid` check. |
+| `DEMO_CONSOLE_CLIENT_SECRET` | `demoConsoleClientSecret` (**secure**) | Blank | Generated Entra credential kept in gitignored azd state and an ACA secret; never browser code. Clear locally with `azd env set DEMO_CONSOLE_CLIENT_SECRET ""`, then provision to append a replacement credential and deploy the console. |
+
+Tenant validation uses `AZURE_TENANT_ID` / backend `tid`; no multi-tenant/public-user console mode is provided. `postprovision` sets the redirect URI from the deployed endpoint. Entra apps/credentials survive `azd down` and need manual cleanup. Do not share unredacted `azd env get-values` output.
+
+The azd service is **`demo-console`**, built remotely with repository-root Docker context; its image uses **Python 3.12**. Its one Container App is **`ca-demo-console`** in the existing ACA environment, with scale-to-zero and **maxReplicas=1**. `NETWORK_ISOLATION=true` makes the environment internal: the browser needs VNet/VPN connectivity and private DNS. `DEPLOY_AGENT_ON_ACA` controls a different, optional agent runtime, not the console.
+
+Console backend managed-identity grants: **Azure AI User** (Foundry project), **Cognitive Services User** (Foundry account; APIM token audience `https://cognitiveservices.azure.com`), **Log Analytics Reader** (workspace), **Key Vault Secrets User** (vault). Browser identity is not delegated via OBO.
+
+Console limits are fixed application safeguards, not extra deployment knobs: saved KQL **01-11**, **one-hour API timespan**, appended **`take 200`**; throttle **1-120 calls**, **concurrency ≤8**, **dispatch window ≤90 seconds**, **per-request timeout ≤15 seconds** (already-started requests may finish at the deadline). Query **04** accepts a trace ID; `passed` means rows returned, not a validated audit assertion. All agent prompts, direct writes and throttle bursts need explicit confirmation. The direct gateway selector never overrides deployed agent `HOSTED_DEFAULT_GATEWAY`. Console display is a **provisioning snapshot**, not live discovery: reprovision after changing `AGENT_DEFAULT_GATEWAY` to sync it as well as redeploying agents.
 
 ### <img src="./assets/icons/api-management.svg" width="28" alt=""/> Gateway
 
@@ -84,7 +102,7 @@ Set a value with `azd env set <NAME> <value>`. Defaults come from `infra/azd.par
 | `AI_GATEWAY_TIER_LOCATION` | `eastus2` | `eastus2`, `swedencentral` | Region for the AI Gateway tier; independent of `AZURE_LOCATION`. |
 | `AIGW_REQUEST_LIMIT_RPM` | `120` | Integer | Request-rate policy target for the tier. |
 | `AIGW_RUNTIME_KEY_SECRET_NAME` | `aigw-runtime-key` | Key Vault secret name | Secret that Bicep writes the gateway-scoped `agents` runtime key to (from `listSecrets` on `Microsoft.ApiManagement/service/apiKeys`). `postprovision` only repairs a missing secret. |
-| `AIGW_KEY_DELIVERY` | `keyvault` | `keyvault`, `env` | How hosted agents obtain the runtime key. `keyvault` (default) reads the secret with the **agent instance identity**. `env` ![Opt-in](./assets/badges/opt-in.svg) projects the key into the agent environment as `AIGW_RUNTIME_KEY` for subscriptions whose policy blocks Key Vault public access. See [Key Vault access under network policy](./07-identity-auth-traceability.md#key-vault-access-under-network-policy). |
+| `AIGW_KEY_DELIVERY` | `keyvault` | `keyvault`, `env` | Default: hosted agents read Key Vault with their **instance identities**, console backend with its **managed identity**. `env` ![Opt-in](./assets/badges/opt-in.svg) projects `AIGW_RUNTIME_KEY` to agent config and an **ACA secret** for the console; never browser code. Demo-only compromise, not a network-policy bypass for other dependencies. See [Key Vault access under network policy](./07-identity-auth-traceability.md#key-vault-access-under-network-policy). |
 | `AIGW_RUNTIME_KEY` | Blank | Runtime key | `postprovision` fills it only when `AIGW_KEY_DELIVERY=env` and clears it (`""`) in `keyvault` mode. In `keyvault` mode the agent uses a non-empty value only as a fallback when the Key Vault read fails (WARNING `aigw_runtime_key_source`); in `env` mode it is required and Key Vault is never read. The key is never logged. Treat it as a secret: keep it in the azd environment and never commit it. |
 
 ### <img src="./assets/icons/virtual-network.svg" width="28" alt=""/> Network ![Opt-in](./assets/badges/opt-in.svg)
@@ -145,6 +163,8 @@ Set a value with `azd env set <NAME> <value>`. Defaults come from `infra/azd.par
 | <img src="./assets/icons/container-registry.svg" width="20" alt=""/> | `AZURE_CONTAINER_REGISTRY_ENDPOINT` | `containerRegistryEndpoint` | Container registry endpoint. |
 | <img src="./assets/icons/container-registry.svg" width="20" alt=""/> | `ACR_NAME` | Not written to IDs file | Registry name, read by `postprovision` to print the isolated-mode ACR allowlist step. It is a `main.bicep` output; if `azd` does not surface it, run `azd env set ACR_NAME <name>`. |
 | <img src="./assets/icons/container-apps-environment.svg" width="20" alt=""/> | `CONTAINER_APPS_ENVIRONMENT_NAME` | `containerAppsEnvironmentName` | Container Apps environment. |
+| <img src="./assets/icons/container-apps.svg" width="20" alt=""/> | `DEMO_CONSOLE_URL` | `demoConsoleUrl` | Browser front door; VNet/VPN access required in isolated mode. Not a live-health assertion. |
+| <img src="./assets/icons/container-apps.svg" width="20" alt=""/> | `DEMO_CONSOLE_APP_NAME` | `demoConsoleAppName` | Console Container App name (`ca-demo-console`). |
 | <img src="./assets/icons/api-management.svg" width="20" alt=""/> | `APIM_NAME` | `apimName` | APIM service. |
 | <img src="./assets/icons/api-management.svg" width="20" alt=""/> | `APIM_GATEWAY_URL` | `apimGatewayUrl` | APIM base URL. |
 | <img src="./assets/icons/ai-gateway.svg" width="20" alt=""/> | `AI_GATEWAY_MODE` | `aiGatewayMode` | `apimv2`, `aigateway` or `both`. |
@@ -173,7 +193,7 @@ Set a value with `azd env set <NAME> <value>`. Defaults come from `infra/azd.par
 
 <details><summary><b>Show the complete key list</b></summary>
 
-`resourceGroup`, `foundryAccountName`, `foundryProjectName`, `foundryProjectEndpoint`, `modelDeploymentName`, `containerRegistryEndpoint`, `containerAppsEnvironmentName`, `apimName`, `apimGatewayUrl`, `aiGatewayMode`, `aigwGatewayName`, `aigwGatewayUrl`, `aigwLocation`, `aigwMcpCatalogUrl`, `aigwMcpRecordsUrl`, `llmApiPath`, `mcpCatalogUrl`, `mcpRecordsUrl`, `recordsApiUrl`, `gatewayAppClientId`, `logAnalyticsWorkspaceId`, `logAnalyticsCustomerId`, `applicationInsightsName`, `workbookId`, `queryPackId`, `keyVaultName`, `keyVaultUri`, `vnetId`, optional `hostedAgentUrl`, optional `agentMafResponsesEndpoint`, optional `agentLanggraphResponsesEndpoint`, `workload.domainProfile`, and `workload.profilePath`.
+`resourceGroup`, `demoConsoleUrl`, `demoConsoleAppName`, `foundryAccountName`, `foundryProjectName`, `foundryProjectEndpoint`, `modelDeploymentName`, `containerRegistryEndpoint`, `containerAppsEnvironmentName`, `apimName`, `apimGatewayUrl`, `aiGatewayMode`, `aigwGatewayName`, `aigwGatewayUrl`, `aigwLocation`, `aigwMcpCatalogUrl`, `aigwMcpRecordsUrl`, `llmApiPath`, `mcpCatalogUrl`, `mcpRecordsUrl`, `recordsApiUrl`, `gatewayAppClientId`, `logAnalyticsWorkspaceId`, `logAnalyticsCustomerId`, `applicationInsightsName`, `workbookId`, `queryPackId`, `keyVaultName`, `keyVaultUri`, `vnetId`, optional `hostedAgentUrl`, optional `agentMafResponsesEndpoint`, optional `agentLanggraphResponsesEndpoint`, `workload.domainProfile`, and `workload.profilePath`.
 
 </details>
 
@@ -314,4 +334,4 @@ Next: back to the [docs index](./00-reproduce-this-demo.md) →
 
 ---
 
-*Last updated: 2026-10-02*
+*Last updated: 2026-10-15*

@@ -31,6 +31,16 @@ param apimSku string = 'StandardV2'
 param apimPublisherEmail string
 param apimPublisherName string = 'Demo Publisher'
 param gatewayAppClientId string = ''
+param demoConsoleClientId string
+param demoConsoleAllowedUserId string
+@secure()
+param demoConsoleClientSecret string
+param agentDefaultGateway string = 'apimv2'
+@allowed([
+  'keyvault'
+  'env'
+])
+param aigwKeyDelivery string = 'keyvault'
 param tokenLimitTpmPerAgent int = 20000
 param aigwRequestLimitRpm int = 120
 param aigwRuntimeKeySecretName string = 'aigw-runtime-key'
@@ -370,6 +380,38 @@ var mcpCatalogUrl = deployApimV2Gateway ? '${activeGatewayUrl}/catalog-mcp/mcp' 
 var mcpRecordsUrl = deployApimV2Gateway ? '${activeGatewayUrl}/records-mcp/mcp' : aigwMcpRecordsUrl
 var recordsApiUrl = deployApimV2Gateway ? '${activeGatewayUrl}/records' : ''
 
+module demoConsole 'modules/demo-console.bicep' = {
+  name: 'demo-console'
+  params: {
+    location: location
+    tags: tags
+    environmentId: containerApps.outputs.environmentId
+    defaultDomain: containerApps.outputs.defaultDomain
+    pullIdentityId: containerApps.outputs.pullIdentityId
+    registryEndpoint: foundry.outputs.containerRegistryEndpoint
+    tenantId: tenantId
+    clientId: demoConsoleClientId
+    allowedUserId: demoConsoleAllowedUserId
+    clientSecret: demoConsoleClientSecret
+    domainProfile: domainProfile
+    agentDefaultGateway: agentDefaultGateway
+    foundryAccountName: foundry.outputs.aiServicesName
+    foundryProjectName: foundry.outputs.aiProjectName
+    foundryProjectEndpoint: foundry.outputs.projectEndpoint
+    apimGatewayUrl: deployApimV2Gateway ? gatewayApim.outputs.gatewayUrl : ''
+    aigwGatewayUrl: aigwGatewayUrl
+    aiGatewayMode: aiGatewayMode
+    modelDeploymentName: modelDeploymentName
+    workspaceName: monitoring.outputs.logAnalyticsWorkspaceName
+    workspaceCustomerId: monitoring.outputs.logAnalyticsCustomerId
+    keyVaultName: keyvault.outputs.keyVaultName
+    keyVaultUri: keyvault.outputs.keyVaultUri
+    runtimeKeySecretName: aigwRuntimeKeySecretName
+    keyDelivery: aigwKeyDelivery
+    runtimeKey: deployAiGatewayTier && aigwKeyDelivery == 'env' ? gatewayAi.outputs.runtimeKey : ''
+  }
+}
+
 resource keyVaultForRbac 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
   name: keyVaultName
 }
@@ -492,3 +534,5 @@ output KEY_VAULT_URI string = keyvault.outputs.keyVaultUri
 output AIGW_RUNTIME_KEY_SECRET_NAME string = aigwRuntimeKeySecretName
 output VNET_ID string = networkIsolation ? network.outputs.vnetId : ''
 output ACR_NAME string = acrName
+output DEMO_CONSOLE_URL string = demoConsole.outputs.url
+output DEMO_CONSOLE_APP_NAME string = demoConsole.outputs.appName

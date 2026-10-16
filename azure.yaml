@@ -11,6 +11,14 @@ infra:
   path: infra
   module: azd
 services:
+  demo-console:
+    project: .
+    host: containerapp
+    language: docker
+    docker:
+      path: ./src/demo-console/Dockerfile
+      context: .
+      remoteBuild: true
   agent-maf:
     project: ./src/agents/maf
     host: azure.ai.agent

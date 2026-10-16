@@ -14,6 +14,14 @@ def _modules():
     return ROOT/"infra"/"modules"
 
 
+def test_console_easy_auth_explicitly_allows_only_its_own_browser_origin():
+    text = (_modules() / "demo-console.bicep").read_text()
+    assert "login: {\n      allowedExternalRedirectUrls: [\n        consoleUrl\n      ]\n    }" in text
+    assert "var consoleUrl = 'https://${appName}.${defaultDomain}'" in text
+    assert "requireHttps: true" in text
+    assert "allowedPrincipals:" in text and "allowedUserId" in text
+
+
 def test_isolation_creates_private_endpoints_and_dns_zones():
     main=ROOT/"infra"/"main.bicep"; dns=_modules()/"private-dns.bicep"
     if not main.exists() or not dns.exists(): pytest.skip("isolation modules not present")
