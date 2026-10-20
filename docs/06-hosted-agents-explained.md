@@ -53,7 +53,7 @@ Foundry does not care which framework you use as long as the container behaves l
 | <img src="./assets/icons/container-apps.svg" width="20" alt="lifecycle"/> **Lifecycle** | Handle SIGTERM gracefully | The platform stops idle sessions |
 | <img src="./assets/icons/application-insights.svg" width="20" alt="telemetry"/> **Telemetry** | Emit OpenTelemetry | Export to Application Insights via `APPLICATIONINSIGHTS_CONNECTION_STRING`, which the platform injects into the container; spans `invoke_agent`, `execute_tool`, `chat`. Export is GA for hosted and prompt agents |
 
-The repository enforces this contract offline: `tests/test_hosted_agent_contract.py` builds each agent's **official host** (`ResponsesHostServer`, and `InvocationsHostServer` for the local-only protocol), drives it with a Starlette test client against the `/readiness` and `/responses` routes, and skips when the framework packages are not installed. The live run confirmed the same hosts on the platform.
+The repository tests this contract offline: `tests/test_hosted_agent_contract.py` builds each agent's **official host** (`ResponsesHostServer`, and `InvocationsHostServer` for the local-only protocol), drives it with a Starlette test client against `/readiness` and `/responses`, and skips when framework packages are absent. A skipped host test is not a passing contract check; report it explicitly and rerun with the declared dependencies. The 2026-10-02 live run confirmed these hosts historically, not current browser acceptance.
 
 ## Agent Framework vs LangGraph
 
@@ -149,6 +149,8 @@ Learn: [Microsoft Agent Framework hosted agents](https://learn.microsoft.com/en-
 
 ### Image and deployment definition
 
+After changing canonical root profiles, run `scripts/sync-agent-profiles.ps1` before builds. Despite its back-compatible name, the helper synchronizes **both agents and both tool image contexts**. Synchronizing sample prompts does not change agent business instructions, tool implementations, seed data or deployed routes.
+
 | | Item | Value |
 |---|---|---|
 | <img src="./assets/icons/container-registry.svg" width="20" alt="image"/> | Base image | `python:3.12-slim`, non-root user `app`, port 8088, profiles copied to `config/profiles`, `ARG PIP_INDEX_URL`, `pip --pre` for the pre-release hosting package, and `chown app:app /app` (without it the host crashes with `PermissionError: /app/.agentserver`) |
@@ -185,7 +187,13 @@ Do not keep business state in the container's memory: a new session may land in 
 | <img src="./assets/icons/code.svg" width="20" alt="flexibility"/> | Flexibility | Must meet the container contract | Any runtime shape |
 
 > [!TIP]
-> **Recommendation:** use hosted agents as the default: the contract is small, scale-to-zero is automatic, and identity and governance integrate with Foundry. Use self-hosting only when you need a runtime that cannot meet the contract. The optional Container Apps copy here exists to show the identity and audit differences, not as the primary path.
+> **Recommendation:** hosted agents are the starting **candidate for this generic sample**, not a customer runtime decision. Validate contract/framework compatibility, identity/delegation, backend authorization, network/data requirements and operations before choosing hosted versus self-hosted. Customer requirements and approvals remain unknown / to agree in [doc 11's discovery and pilot scaffold](./11-demo-walkthrough.md#candidate-read-only-first-pilot). The optional Container Apps copy is a separate manual comparison, not proof of runtime parity.
+
+### Console user OBO does not change hosted-agent identity
+
+S2's opt-in [console-to-APIM user OBO](./07-identity-auth-traceability.md#console-to-apim-user-obo-three-apps) is a **different caller path**: a confidential sign-in client obtains a user access token for the console API, which exchanges it server-side for `Gateway.Access` and performs read-only catalog MCP discovery. It does not invoke a hosted agent, call a model, write records or implement business authorization.
+
+MAF and LangGraph still call downstream as their **instance identities**, even when a human initiated S1. Use S1/S5 audit evidence to inspect that app-only path; neither console sign-in nor the S2 OBO result establishes hosted-agent user delegation. The backward-compatible `samples/obo-client` path only signs in a user and invokes Foundry; it contains no downstream token exchange. Full human-browser/OBO acceptance remains subject to the [readiness record](./04-testing.md), not inferred from setup or local tests.
 
 ## Appendix: swapping the framework
 
@@ -205,4 +213,4 @@ Whatever you choose, reuse `gateway_auth.py` (gateway selection, token or runtim
 
 Next: [07 - Identity, auth and traceability](./07-identity-auth-traceability.md) →
 
-*Last updated: 2026-10-02*
+*Last updated: 2026-10-20*

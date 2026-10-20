@@ -15,6 +15,7 @@
   "aiGatewayMode": "apimv2",
   "aigwGatewayName": "<AIGW_GATEWAY_NAME>",
   "aigwGatewayUrl": "https://<aigw>.azure-api.net",
+  "aigwPrincipalId": "<AIGW_PRINCIPAL_ID>",
   "aigwLocation": "eastus2",
   "aigwMcpCatalogUrl": "https://<aigw>.azure-api.net/default/toolservers/catalog-mcp/mcp",
   "aigwMcpRecordsUrl": "https://<aigw>.azure-api.net/default/toolservers/records/mcp",

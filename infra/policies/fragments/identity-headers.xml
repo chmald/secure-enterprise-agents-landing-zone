@@ -2,6 +2,9 @@
     <set-header name="x-gw-agent-appid" exists-action="delete" />
     <set-header name="x-gw-agent-oid" exists-action="delete" />
     <set-header name="x-gw-user-oid" exists-action="delete" />
+    <set-header name="x-gw-user-name" exists-action="delete" />
+    <set-header name="x-gw-user-username" exists-action="delete" />
+    <set-header name="x-gw-delegated-scopes" exists-action="delete" />
     <set-header name="x-gw-actor-facets" exists-action="delete" />
     <set-header name="x-gw-request-id" exists-action="delete" />
     <set-variable name="validatedAzp" value="@{
@@ -20,8 +23,26 @@
     <set-variable name="validatedUserOid" value="@{
         var jwt = (Jwt)context.Variables[&quot;validatedToken&quot;];
         if (jwt == null) { return &quot;&quot;; }
-        if (jwt.Claims.ContainsKey(&quot;sub&quot;) &amp;&amp; jwt.Claims.ContainsKey(&quot;scp&quot;)) { return jwt.Claims[&quot;oid&quot;].FirstOrDefault() ?? &quot;&quot;; }
+        if (jwt.Claims.ContainsKey(&quot;sub&quot;) &amp;&amp; jwt.Claims.ContainsKey(&quot;scp&quot;) &amp;&amp; jwt.Claims.ContainsKey(&quot;oid&quot;)) { return jwt.Claims[&quot;oid&quot;].FirstOrDefault() ?? &quot;&quot;; }
         return &quot;&quot;;
+    }" />
+    <set-variable name="validatedUserName" value="@{
+        if (string.IsNullOrEmpty((string)context.Variables[&quot;validatedUserOid&quot;])) { return &quot;&quot;; }
+        var jwt = (Jwt)context.Variables[&quot;validatedToken&quot;];
+        return jwt.Claims.ContainsKey(&quot;name&quot;) ? jwt.Claims[&quot;name&quot;].FirstOrDefault() ?? &quot;&quot; : &quot;&quot;;
+    }" />
+    <set-variable name="validatedUserUsername" value="@{
+        if (string.IsNullOrEmpty((string)context.Variables[&quot;validatedUserOid&quot;])) { return &quot;&quot;; }
+        var jwt = (Jwt)context.Variables[&quot;validatedToken&quot;];
+        if (jwt.Claims.ContainsKey(&quot;preferred_username&quot;)) { return jwt.Claims[&quot;preferred_username&quot;].FirstOrDefault() ?? &quot;&quot;; }
+        if (jwt.Claims.ContainsKey(&quot;upn&quot;)) { return jwt.Claims[&quot;upn&quot;].FirstOrDefault() ?? &quot;&quot;; }
+        if (jwt.Claims.ContainsKey(&quot;email&quot;)) { return jwt.Claims[&quot;email&quot;].FirstOrDefault() ?? &quot;&quot;; }
+        return &quot;&quot;;
+    }" />
+    <set-variable name="validatedDelegatedScopes" value="@{
+        if (string.IsNullOrEmpty((string)context.Variables[&quot;validatedUserOid&quot;])) { return &quot;&quot;; }
+        var jwt = (Jwt)context.Variables[&quot;validatedToken&quot;];
+        return string.Join(&quot; &quot;, jwt.Claims[&quot;scp&quot;]);
     }" />
     <set-variable name="validatedActorFacets" value="@{
         var jwt = (Jwt)context.Variables[&quot;validatedToken&quot;];
@@ -37,6 +58,15 @@
     <set-header name="x-gw-user-oid" exists-action="override">
         <value>@((string)context.Variables["validatedUserOid"])</value>
     </set-header>
+    <set-header name="x-gw-user-name" exists-action="override">
+        <value>@((string)context.Variables["validatedUserName"])</value>
+    </set-header>
+    <set-header name="x-gw-user-username" exists-action="override">
+        <value>@((string)context.Variables["validatedUserUsername"])</value>
+    </set-header>
+    <set-header name="x-gw-delegated-scopes" exists-action="override">
+        <value>@((string)context.Variables["validatedDelegatedScopes"])</value>
+    </set-header>
     <set-header name="x-gw-actor-facets" exists-action="override">
         <value>@((string)context.Variables["validatedActorFacets"])</value>
     </set-header>
@@ -44,4 +74,3 @@
         <value>@(context.RequestId.ToString())</value>
     </set-header>
 </fragment>
-

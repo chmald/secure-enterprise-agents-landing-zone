@@ -18,11 +18,11 @@
 
 ![GA](./assets/badges/ga.svg) ![Preview](./assets/badges/preview.svg) ![Opt-in](./assets/badges/opt-in.svg) ![Live tested](./assets/badges/live-tested.svg)
 
-This is the **audit plane** of the landing zone: how a security, compliance or platform team proves *which human, through which agent, called which tool or model, at what time, with how many tokens, and whether the gateway allowed it*. It is written for platform engineers who operate the demo and for auditors or security architects who need to see the evidence trail before they approve a hosted-agent workload.
+This is the **audit plane** of the landing zone: how a security, compliance or platform team inspects *which caller or agent called which tool/model, when, what tokens were recorded, and which controls produced evidence*. Human attribution requires an actually delegated flow; the browser console uses its backend MI, and the tier runtime key identifies no human/agent. Missing counters or joins remain unknown, not proof of a complete audit chain. It is written for operators and architects evaluating evidence, not as production certification.
 
 > [!IMPORTANT]
 > **The auditor's question.** *"Last Tuesday a work order was created by an agent. Which person asked for it, which agent identity acted, which gateway and tool carried the call, what did the model cost in tokens, and was any control triggered?"*
-> Every section below exists to answer that one question with a join across a handful of Log Analytics tables - without logging secrets or full tool payloads.
+> This is a target audit question, not a claim that every caller/path supplies all fields. Inspect actual rows and missing joins. S2 has an explicit, opt-in console-to-APIM user OBO flow; default calls and hosted agents remain application-only. The legacy user-invocation sample does not implement OBO. Customer audit/privacy requirements remain unknown / to agree in the [session guide](./11-demo-walkthrough.md#current-state-discovery-scaffold).
 
 ## At a glance
 
@@ -48,7 +48,7 @@ The picture below shows where each signal is produced and where it is stored. Th
 <sub>Editable source: [`assets/trace-correlation.drawio`](./assets/trace-correlation.drawio) - regenerate with `python scripts/export_diagrams.py docs/assets`.</sub>
 
 > [!NOTE]
-> Both pictures describe the Standard v2 path end to end. The preview AI Gateway tier emits OpenTelemetry `gen_ai.*` data to Application Insights instead of APIM resource logs, so the same question is answered with query 11 plus the tool audit record (see [AI Gateway tier telemetry](#ai-gateway-tier-telemetry-preview)).
+> Use **APIM queries 01/04 as the primary session proof**: selected fresh catalog/records traces joined backend `tool_audit` with `ApiManagementGatewayLogs`. The pictures describe a correlation design, not every observed hop. Selected fresh preview traces returned `AppRequests` / `AppDependencies` without joined backend `tool_audit`; **preview end-to-end correlation proof is incomplete**. Query 11 adds request/token-source observations, not a missing-hop fallback.
 
 ## Sources, categories and tables
 
@@ -56,7 +56,7 @@ Each Azure resource sends a defined set of log categories to the workspace throu
 
 | Source | Diagnostic setting / path | Categories enabled | Tables you query | Status |
 |---|---|---|---|---|
-| <img src="./assets/icons/api-management.svg" width="20" alt=""/> **API Management (Standard v2)** | `apim-resource-logs` ([monitor reference](https://learn.microsoft.com/en-us/azure/api-management/monitor-api-management-reference)) | `GatewayLogs`, `GatewayLlmLogs`, `GatewayMCPLogs`, `WebSocketConnectionLogs`, `DeveloperPortalAuditLogs` + `AllMetrics` | `ApiManagementGatewayLogs`, `ApiManagementGatewayLlmLog`, `ApiManagementGatewayMCPLog` | ![GA](./assets/badges/ga.svg) |
+| <img src="./assets/icons/api-management.svg" width="20" alt=""/> **API Management (Standard v2)** | `apim-resource-logs` ([monitor reference](https://learn.microsoft.com/en-us/azure/api-management/monitor-api-management-reference)) | `GatewayLogs`, `GatewayLlmLogs`, `GatewayMCPLogs`, `WebSocketConnectionLogs`, `DeveloperPortalAuditLogs` + `AllMetrics` | HTTP gateway / LLM logs; native `ApiManagementGatewayMCPLog` is **conditional**, not expected from these sample HTTP MCP proxies | ![GA](./assets/badges/ga.svg) |
 | <img src="./assets/icons/foundry.svg" width="20" alt=""/> **Foundry account** | `foundry-account-logs` | `Audit`, `RequestResponse`, `Trace`, `AzureOpenAIRequestUsage`, `ManagedNetworkEvent` + `AllMetrics` | `AzureDiagnostics` (or resource-specific tables, depending on the account's destination type) | ![GA](./assets/badges/ga.svg) |
 | <img src="./assets/icons/foundry-project.svg" width="20" alt=""/> **Foundry project** | `foundry-project-logs` | `Audit`, `Trace` | `AzureDiagnostics` | ![GA](./assets/badges/ga.svg) |
 | <img src="./assets/icons/container-apps-environment.svg" width="20" alt=""/> **Container Apps environment** | `appLogsConfiguration` (workspace shared key) | Console and system logs for catalog MCP, records API and the optional agent-on-ACA | `ContainerAppConsoleLogs_CL` (contains the `tool_audit` JSON lines) | ![GA](./assets/badges/ga.svg) |
@@ -64,13 +64,15 @@ Each Azure resource sends a defined set of log categories to the workspace throu
 | <img src="./assets/icons/container-registry.svg" width="20" alt=""/> **Container Registry** | `acr-logs` | `ContainerRegistryLoginEvents`, `ContainerRegistryRepositoryEvents` | `ContainerRegistryLoginEvents`, `ContainerRegistryRepositoryEvents` | ![GA](./assets/badges/ga.svg) |
 | <img src="./assets/icons/activity-log.svg" width="20" alt=""/> **Subscription Activity Log** | `modules/activity-log.bicep` ([activity log](https://learn.microsoft.com/en-us/azure/azure-monitor/essentials/activity-log)) | `Administrative`, `Security`, `Policy`, `ResourceHealth`, `Recommendation` | `AzureActivity` | ![Opt-in](./assets/badges/opt-in.svg) `ENABLE_ACTIVITY_LOG_EXPORT` |
 | <img src="./assets/icons/entra-id.svg" width="20" alt=""/> **Microsoft Entra ID** | `scripts/Enable-EntraDiagnostics.ps1` (tenant level; needs a Security Administrator) | Service principal, managed identity and audit logs; agent sign-ins appear as an `agentSignIn` attribute ([Learn](https://learn.microsoft.com/en-us/entra/agent-id/sign-in-audit-logs-agents)) | `AADServicePrincipalSignInLogs`, `AADManagedIdentitySignInLogs`, `AuditLogs` | ![Opt-in](./assets/badges/opt-in.svg) `ENABLE_ENTRA_DIAGNOSTICS` |
-| <img src="./assets/icons/ai-gateway.svg" width="20" alt=""/> **AI Gateway tier** | Built-in Application Insights telemetry ([Learn](https://learn.microsoft.com/en-us/azure/api-management/genai-gateway-capabilities)) | n/a - telemetry, not a diagnostic category | `AppRequests` (`AppRoleName` `aigw-*`; tokens in `Measurements`), `AppDependencies`, `ApiManagementGatewayMCPLog`; **no** `ApiManagementGatewayLlmLog` | ![Public preview](./assets/badges/public-preview.svg) ![Live tested](./assets/badges/live-tested.svg) |
+| <img src="./assets/icons/ai-gateway.svg" width="20" alt=""/> **AI Gateway tier** | Application Insights requests plus identity-attributed Foundry diagnostics | Native token metrics are separate from request logs ([Learn](https://learn.microsoft.com/en-us/azure/api-management/ai-gateway-govern-secure-assets#monitoring)) | `AppRequests` (`AppRoleName` `aigw-*`) for requests; `AzureDiagnostics` `RequestResponse` for **Foundry-observed** tokens; `AppDependencies`, `ApiManagementGatewayMCPLog`; **no** `ApiManagementGatewayLlmLog` | ![Public preview](./assets/badges/public-preview.svg); request-log token counters can be zero despite real usage |
 | <img src="./assets/icons/application-insights.svg" width="20" alt=""/> **Hosted agents and tools** | Application Insights exporter (`APPLICATIONINSIGHTS_CONNECTION_STRING`, injected by the Foundry platform for hosted agents) | OTel spans `invoke_agent`, `chat`, `execute_tool`; `tool_audit` log lines | `AppDependencies` (GenAI spans, `AppRoleName` `agent-maf` / `agent-langgraph`), `AppGenAIContent`, `AppTraces`, `AppRequests` | ![GA](./assets/badges/ga.svg) prompt and hosted agents ([Learn](https://learn.microsoft.com/en-us/azure/foundry/observability/concepts/trace-agent-concept)) |
 
 > [!NOTE]
 > There is **no Foundry Agent Service-specific diagnostic category**. Agent-level observability comes from OpenTelemetry traces exported to Application Insights; Foundry export is GA for prompt and hosted agents and Preview for workflow and external agents. The OpenTelemetry GenAI semantic conventions (`chat {model}`, `create_agent`, `invoke_agent {agent}`, `execute_tool {tool}`) are still marked *Development* upstream, so treat attribute names as subject to change ([OpenTelemetry GenAI](https://opentelemetry.io/docs/specs/semconv/gen-ai/)).
 
 APIM's built-in analytics also gains a *Language models* view for token and model usage. It is useful for a quick look, but classic APIM analytics retires in March 2027, so the saved queries and workbook here deliberately rely on Log Analytics instead ([APIM monitoring](https://learn.microsoft.com/en-us/azure/api-management/monitor-api-management)).
+
+**API type matters:** Standard-v2 `catalog-mcp` and `records-mcp` are HTTP APIs (`apiType=http`) proxying backend MCP adapters. Records MCP wraps the same record business functions, not APIM-managed OpenAPI generation. The preview records tool server **is** OpenAPI-generated and dispatches REST. Enabling `GatewayMCPLogs` does not make the sample HTTP APIs emit native MCP-server events; query 05 can legitimately be empty. Use `tool_audit` / HTTP gateway joins in 01/04, and keep native 05 intact and conditional.
 
 ## LLM message logging and privacy
 
@@ -95,11 +97,11 @@ Token accounting has two layers: the **log** (`ApiManagementGatewayLlmLog`, per 
 |---|---|---|---|
 | `llm-emit-token-metric` | Model API policy | Agent `appid`, user `oid`, API, subscription | Per-agent and per-user consumption in Azure Monitor metrics. The workbook uses logs/spans instead; it does not query this custom metric directly. |
 | `llm-token-limit` | Model API policy | Counter key = validated `azp` claim; `TOKEN_LIMIT_TPM_PER_AGENT` (default 20,000 tokens per minute) | Per-agent throttling; a breach returns HTTP 429 and feeds the `token-limit-throttling-spike` alert. |
-| `llm-content-safety` | Model API policy, gated by `ENABLE_CONTENT_SAFETY` | Content-safety backend | Blocks harmful prompts; surfaces in query 09 and the `content-safety-blocks` alert. |
+| `ENABLE_CONTENT_SAFETY` | **Preview-tier policy cards only** in this sample; no implemented APIM `llm-content-safety` policy | Gateway-specific configuration | Inspect actual filtering/block evidence separately. Query 09/alert keyword or 403 matches do not prove APIM enforcement. |
 | `ApiManagementGatewayLlmLog` | Diagnostic category `GatewayLlmLogs` | `CorrelationId`, `ModelName`, `PromptTokens`, `CompletionTokens`, `TotalTokens` | Per-request token audit; joined to the tool audit by `gateway_request_id`. |
 
 > [!TIP]
-> To attribute tokens to a person, join `ApiManagementGatewayLlmLog.CorrelationId` to the audit record's `gateway_request_id` (query 02 and query 01 do this for you). The `x-gw-user-oid` and `x-gw-agent-appid` headers added by APIM are the source of the dimensions.
+> Attempt caller/token attribution only where actual correlation keys and identity context exist. Queries 01/02 retain the available context; they cannot manufacture a user, agent or relationship between separate model/tool requests. APIM-derived headers identify the authenticated caller; direct console checks identify its MI, and a human field requires actual delegation.
 
 Correlation must be present in the actual source rows. Model and tool requests can have different gateway request IDs; a missing join remains unknown token attribution, not zero spend. Query 02 keeps hosted-agent `agent_name` separate from an actual `agent_appid`. Gateway and agent token observations describe overlapping work and must not be added together.
 
@@ -112,17 +114,24 @@ Every tool backend (catalog MCP server and records API) writes **one JSON line**
 | `timestamp`, `service`, `tool`, `operation` | When, which backend, which tool, which operation. |
 | `trace_id`, `span_id`, `traceparent` | W3C trace context forwarded unchanged by the gateway. |
 | `decision`, `reason` | `allowed` or `denied`, plus the policy reason. |
-| `human_principal` | `{ oid }` of the delegated user, or `null` for autonomous calls. |
-| `agent_principal` | `{ appid, oid, actor_facets }` of the calling agent identity. |
+| `human_principal` | `{ oid, name, username }` only when validated delegated-user context is present; `null` for console-MI/agent workload calls. Name/username are optional token claims; the object ID is authoritative. |
+| `agent_principal` | Legacy field name for `{ appid, oid, actor_facets }` derived from the caller; it identifies the console MI on direct console checks, not necessarily an agent. |
+| `identity_type`, `delegated_scopes` | `application`, `delegated_user`, `runtime_key` or `unattributed`; user scopes are recorded only for a delegated subject. A delegated JWT alone does not establish which OAuth grant produced it. |
 | `gateway_request_id` | APIM `context.RequestId` - the join key to the gateway tables. |
 | `gateway` | `apimv2` when any `x-gw-*` identity header is present, `aigateway` when `x-gw-caller` is present, `null` when called directly. |
 | `caller` | `aigw-runtime-key:agents` on the AI Gateway tier path; `null` otherwise. |
 | `domain_profile`, `latency_ms`, `status_code` | Workload profile and result. |
 
-Identity travels in the headers `x-gw-agent-appid`, `x-gw-agent-oid`, `x-gw-user-oid`, `x-gw-actor-facets` and `x-gw-request-id`; `traceparent` is forwarded unchanged.
+Identity travels in the headers `x-gw-agent-appid`, `x-gw-agent-oid`, `x-gw-user-oid`, `x-gw-user-name`, `x-gw-user-username`, `x-gw-delegated-scopes`, `x-gw-actor-facets` and `x-gw-request-id`; `traceparent` is forwarded unchanged. APIM strips incoming values before stamping claims from the validated token; friendly user fields are absent when the token does not provide them.
+
+For the **explicit S2 user OBO probe**, the server first acquires a user access token for the console API, performs the actual OBO exchange to `Gateway.Access`, and discovers catalog MCP tools through APIM. Query 01 exposes the user ID/name/username/scopes and the calling console application separately; the historical `agent_appid` field does not turn that application into a hosted agent. **Read this identity call's audit** filters query 01 to that call's trace. Allow ingestion delay and verify the returned user/caller fields before declaring an audit pass. Acquired-token metadata shown in S2 is not itself audit evidence.
+
+Authentication audit metadata describes a real signed-in operator even when business data is synthetic. Treat user names, usernames and object IDs as privacy-relevant; do not commit them or share unredacted screenshots/log exports. Raw tokens, authorization codes and client secrets are not audit fields. Grant/consent failure, missing configuration, cancelled sign-in or expired state must not silently become a managed-identity call.
+
+Attribution headers describe the verified gateway path, not a production backend trust boundary. The sample's public backend ingress/trust needs separate validation before relying on those headers; JWT validation plus a global tool allowlist is not per-user record authorization ([doc 07](./07-identity-auth-traceability.md#gateway-identity-header-contract)).
 
 > [!NOTE]
-> On the AI Gateway tier the runtime key proves *possession* of a gateway-scoped key, not a principal. Expect `gateway = "aigateway"`, `caller = "aigw-runtime-key:agents"` and `agent_principal = null` - an honest limitation, not a defect. See [doc 11](./11-demo-walkthrough.md) for how to present it.
+> On the AI Gateway tier the runtime key proves *possession* of a gateway-scoped key, not a principal. Expect `gateway = "aigateway"`, `caller = "aigw-runtime-key:agents"` and empty/null fields inside `agent_principal` - an honest limitation, not a defect. See [doc 11](./11-demo-walkthrough.md) for how to present it.
 
 ## Correlation join keys
 
@@ -135,9 +144,9 @@ Identity travels in the headers `x-gw-agent-appid`, `x-gw-agent-oid`, `x-gw-user
 
 ## The saved queries
 
-The new [browser console S5](./11-demo-walkthrough.md#s5--run-bounded-saved-kql-and-inspect-actual-evidence) runs only the fixed saved-query allowlist **01-11**, using backend managed identity with **Log Analytics Reader** at workspace scope. It supplies a **one-hour API timespan** and appends **`take 200`**; query **04** accepts a trace ID. It displays rows, detailed responses and trace IDs, not a fabricated workbook or alert result. No arbitrary KQL is accepted. **“Passed” means the query returned rows, not that an audit assertion was validated.** Review row contents to establish the actual claim.
+The [browser console S5](./11-demo-walkthrough.md#s5--run-bounded-saved-kql-and-inspect-actual-evidence) runs only the fixed saved-query allowlist **01-11**, with readable labels, using backend managed identity with **Log Analytics Reader** at workspace scope. It supplies a **one-hour API timespan** and appends **`take 200`**; query **04** accepts a trace ID. It displays rows, detailed responses and trace IDs, not a fabricated workbook or alert result. S5 links to the workbook only when `WORKBOOK_ID` is configured; otherwise it shows the missing configuration. No arbitrary KQL is accepted. **“Passed” means the query returned rows, not that an audit assertion was validated.** Review row contents to establish the actual claim.
 
-**Empty results are `not_run`**, with ingestion-delay/no-evidence guidance, never a pass. Response-header trace IDs are advisory correlation handles; actual source rows must establish propagation/tool use. The [2026-10-16 follow-up](./04-testing.md#live-follow-up-2026-10-16) records limited console/workbook checks and remaining browser acceptance work; historical saved-query evidence below comes from the earlier script-driven run.
+**Empty results are `not_run`**, with ingestion-delay/no-evidence guidance, never a pass. Response-header trace IDs are advisory correlation handles; actual source rows must establish propagation/tool use. The [2026-10-20 limited follow-up](./04-testing.md#limited-follow-up-2026-10-20) records all 11 queries executing without query errors, with many empty current-hour sources, not new evidence passes. Historical saved-query evidence below comes from the earlier script-driven run.
 
 Eleven queries are deployed to a Log Analytics **query pack** by `modules/querypack.bicep` (names `NN-slug`, loaded with `loadTextContent` from `infra/monitoring/queries/`). Open the workspace in the portal, choose *Queries*, and filter by the pack ([query packs](https://learn.microsoft.com/en-us/azure/azure-monitor/logs/query-packs)). From a terminal, run any query with `python scripts/run_audit_queries.py --query 01` and `--trace-id <id>` for query 04.
 
@@ -148,13 +157,13 @@ The KQL blocks below are quoted verbatim from the files in `infra/monitoring/que
 | | |
 |---|---|
 | **Saved query** | `01-who-called-which-tool` |
-| **Purpose** | The headline audit question: human, agent, tool, decision, tokens and time in one row. |
+| **Purpose** | Backend caller/tool/decision evidence; native MCP and token joins are conditional on real matching rows, not a guaranteed human/agent/token record. |
 | **Tables** | `ContainerAppConsoleLogs_CL`, `AppTraces`, `ApiManagementGatewayMCPLog`, `ApiManagementGatewayLlmLog` |
 
 <details><summary><b>Show KQL</b></summary>
 
 ```kusto
-// Question: who (human + agent) called which tool/backend, with tokens, when, and was it allowed? Tables: ContainerAppConsoleLogs_CL, AppTraces, ApiManagementGatewayMCPLog, ApiManagementGatewayLlmLog.
+// Question: who (human subject + calling workload) called which tool/backend, with tokens, when, and was it allowed? Tables: ContainerAppConsoleLogs_CL, AppTraces, ApiManagementGatewayMCPLog, ApiManagementGatewayLlmLog.
 let ToolAudit =
     union isfuzzy=true
         (ContainerAppConsoleLogs_CL | project TimeGenerated, RawLog=tostring(Log_s)),
@@ -170,6 +179,10 @@ let ToolAudit =
         decision = tostring(audit.decision),
         reason = tostring(audit.reason),
         human_oid = tostring(audit.human_principal.oid),
+        human_name = tostring(audit.human_principal.name),
+        human_username = tostring(audit.human_principal.username),
+        identity_type = coalesce(tostring(audit.identity_type), case(isnotempty(tostring(audit.human_principal.oid)), "delegated_user", isnotempty(tostring(audit.agent_principal.oid)), "application", isnotempty(tostring(audit.caller)), "runtime_key", "unattributed")),
+        delegated_scopes = tostring(audit.delegated_scopes),
         agent_appid = tostring(audit.agent_principal.appid),
         agent_oid = tostring(audit.agent_principal.oid),
         gateway = tostring(audit.gateway),
@@ -185,7 +198,7 @@ let Tokens =
 ToolAudit
 | join kind=leftouter GatewayTools on $left.gateway_request_id == $right.CorrelationId
 | join kind=leftouter Tokens on CorrelationId
-| project TimeGenerated, trace_id, gateway_request_id, gateway, caller, human_oid, agent_appid, agent_oid, service, tool=coalesce(tool, ToolName), operation=coalesce(operation, Method), decision, reason, status_code, PromptTokens, CompletionTokens, TotalTokens, ServerName, TransportType
+| project TimeGenerated, trace_id, gateway_request_id, gateway, caller, identity_type, human_oid, human_name, human_username, delegated_scopes, agent_appid, agent_oid, service, tool=coalesce(tool, ToolName), operation=coalesce(operation, Method), decision, reason, status_code, PromptTokens, CompletionTokens, TotalTokens, ServerName, TransportType
 | order by TimeGenerated desc
 ```
 
@@ -196,14 +209,16 @@ ToolAudit
 | | |
 |---|---|
 | **Saved query** | `02-token-usage-by-agent-and-user` |
-| **Purpose** | Token consumption per gateway lane, agent and model. The APIM LLM log carries no agent identity, so per-agent figures come from the hosted-agent `gen_ai.*` spans; the AI Gateway tier rows come from `AppRequests` measurements. |
-| **Tables** | `ApiManagementGatewayLlmLog`, `AppRequests`, `AppDependencies`, `AppTraces` |
+| **Purpose** | Token consumption per gateway lane, agent and model. The APIM LLM log carries no agent identity, so per-agent figures come from the hosted-agent `gen_ai.*` spans; tier tokens are **Foundry-observed**, matched to the gateway managed identity. |
+| **Tables** | `ApiManagementGatewayLlmLog`, `AzureDiagnostics`, `AppDependencies`, `AppTraces` |
 
 <details><summary><b>Show KQL</b></summary>
 
 ```kusto
-// Question: how many LLM tokens were consumed by agent and delegated user? Tables: ApiManagementGatewayLlmLog (Standard v2 APIM), AppRequests (AI Gateway tier built-in App Insights telemetry, AppRoleName "aigw-*"), AppDependencies (hosted-agent GenAI spans), AppTraces.
+// Question: how many LLM tokens were consumed by agent and delegated user? Tables: ApiManagementGatewayLlmLog (Standard v2 APIM), AzureDiagnostics (Foundry-observed tier usage), AppDependencies (hosted-agent GenAI spans), AppTraces.
 // The gateway LLM log carries no agent identity, so per-agent attribution comes from the hosted-agent gen_ai spans (gen_ai.agent.name, gen_ai.usage.*); user_oid is only populated when a delegated user is present (see query 01).
+// Bind the tier's managed-identity principal ID, not its client ID. Blank means tier attribution is unavailable, never all callers.
+let aigwPrincipalId = "";
 let AgentContext =
     AppTraces
     | where Message has "agent_appid" or tostring(Properties.agent_appid) != ""
@@ -212,16 +227,20 @@ let AgentContext =
     | summarize agent_appid=take_any(agent_appid), user_oid=take_any(user_oid) by CorrelationId;
 let ApimLlmLog =
     ApiManagementGatewayLlmLog
-    | summarize PromptTokens=sum(PromptTokens), CompletionTokens=sum(CompletionTokens), Requests=count() by CorrelationId, ModelName
+    | summarize PromptTokens=sum(PromptTokens), CompletionTokens=sum(CompletionTokens), ModelName=take_anyif(ModelName, isnotempty(ModelName)) by ResourceId=tostring(_ResourceId), CorrelationId
     | join kind=leftouter AgentContext on CorrelationId
-    | summarize Requests=sum(Requests), PromptTokens=sum(PromptTokens), CompletionTokens=sum(CompletionTokens) by agent_appid, user_oid, ModelName
+    | summarize Requests=count(), PromptTokens=sum(PromptTokens), CompletionTokens=sum(CompletionTokens) by agent_appid, user_oid, ModelName
     | extend Source="apim-standard-v2-llm-log", agent_name="";
 let TierRequests =
-    AppRequests
-    | where AppRoleName startswith "aigw-" and Name has "/models/"
-    | extend m=todynamic(Measurements)
-    | summarize Requests=count(), PromptTokens=tolong(sum(todouble(m["gen_ai.usage.input_tokens"]))), CompletionTokens=tolong(sum(todouble(m["gen_ai.usage.output_tokens"])))
-    | extend Source="aigateway-tier-app-insights", agent_appid="", agent_name="", user_oid="", ModelName="";
+    AzureDiagnostics
+    | where Category == "RequestResponse" and ResourceProvider =~ "MICROSOFT.COGNITIVESERVICES"
+    | extend p=parse_json(properties_s)
+    | where isnotempty(aigwPrincipalId) and tostring(p.callerObjectId) =~ aigwPrincipalId
+    | project TimeGenerated, BackendResourceId=tostring(_ResourceId), BackendRequestId=CorrelationId, ModelName=tostring(p.modelDeploymentName), PromptTokens=tolong(p.promptTokens), CompletionTokens=tolong(p.completionTokens)
+    | where isnotempty(BackendRequestId) and isnotempty(ModelName) and isnotnull(PromptTokens) and isnotnull(CompletionTokens)
+    | summarize arg_max(TimeGenerated, ModelName, PromptTokens, CompletionTokens) by BackendResourceId, BackendRequestId
+    | summarize Requests=count(), PromptTokens=sum(PromptTokens), CompletionTokens=sum(CompletionTokens) by ModelName
+    | extend Source="aigateway-tier-foundry-observed", agent_appid="", agent_name="", user_oid="";
 let AgentSpans =
     AppDependencies
     | extend p=todynamic(Properties)
@@ -318,8 +337,10 @@ union isfuzzy=true
 | | |
 |---|---|
 | **Saved query** | `05-mcp-tool-calls` |
-| **Purpose** | Which MCP servers and tools were invoked through APIM, over which transport, by which client, with which error. |
+| **Purpose** | Native MCP-server diagnostic events when emitted: tools, transport, client and errors. Not the primary evidence for the sample's APIM HTTP policy proxies. |
 | **Tables** | `ApiManagementGatewayMCPLog` |
+
+This query intentionally remains native and **conditional**. The Standard-v2 sample MCP routes are `apiType=http`; no events here is not broken wiring. Use backend `tool_audit` in query 01 and HTTP gateway joins in 04. Do not manufacture fallback events or reinterpret empty query-05 rows as a failed MCP transport.
 
 <details><summary><b>Show KQL</b></summary>
 
@@ -408,8 +429,10 @@ union isfuzzy=true
 | | |
 |---|---|
 | **Saved query** | `09-content-safety-blocks` |
-| **Purpose** | Requests blocked by gateway or model content-safety controls. |
+| **Purpose** | Candidate filtering/block signals; inspect source details before attributing an actual gateway or model control. |
 | **Tables** | `ApiManagementGatewayLogs` (`LastErrorMessage`), `ApiManagementGatewayLlmLog`, `AppTraces` |
+
+The query matches text and error signals, including possible model filtering. It does not test that a control is configured or effective, and the APIM sample has no implemented `llm-content-safety` policy. A match or empty result must not become an APIM content-safety acceptance claim. The KQL below remains the maintained saved query, not an assertion engine.
 
 <details><summary><b>Show KQL</b></summary>
 
@@ -449,34 +472,48 @@ union isfuzzy=true
 | | |
 |---|---|
 | **Saved query** | `11-ai-gateway-tier-telemetry` |
-| **Purpose** | Compares AI Gateway tier telemetry (LLM and MCP calls in `AppRequests`, plus the MCP log) with Standard v2 LLM logs and the hosted-agent GenAI spans, per hour and route. |
-| **Tables** | `AppRequests`, `ApiManagementGatewayMCPLog`, `ApiManagementGatewayLlmLog`, `AppDependencies` |
+| **Purpose** | Compares tier native requests and **Foundry-observed** tokens with Standard v2 LLM logs and hosted-agent spans, per hour and route. Native `llm-request` and backend `llm` observations overlap; never add their request counts together. |
+| **Tables** | `AppRequests`, `AzureDiagnostics`, `ApiManagementGatewayMCPLog`, `ApiManagementGatewayLlmLog`, `AppDependencies` |
 | **Status** | ![Live tested](./assets/badges/live-tested.svg) Rewritten over real tables after the v1.2 live run (30 rows). |
 
 <details><summary><b>Show KQL</b></summary>
 
 ```kusto
-// Question: how does AI Gateway tier telemetry compare with Standard v2 APIM LLM logs and the hosted-agent GenAI spans? Tables: AppRequests (AI Gateway tier built-in App Insights telemetry, AppRoleName "aigw-*"; tokens in Measurements gen_ai.usage.*), ApiManagementGatewayMCPLog (AI Gateway tier MCP log), ApiManagementGatewayLlmLog (Standard v2), AppDependencies (hosted-agent gen_ai.* spans).
-// Verified live: the AI Gateway tier writes no ApiManagementGatewayLlmLog rows; its LLM telemetry is the AppRequests row per call.
+// Question: how do gateway requests, Foundry-observed tier tokens and hosted-agent spans compare? Tables: AppRequests, AzureDiagnostics, ApiManagementGatewayMCPLog, ApiManagementGatewayLlmLog, AppDependencies.
+// Tier AppRequests token counters can be zero despite nonzero response usage. Attribute real Foundry RequestResponse counters to the tier's managed identity; never substitute agent totals.
+// Bind the principal ID, not a client ID. Blank means tier token attribution is unavailable. Request and token observation rows overlap and are not additive.
+let aigwPrincipalId = "";
 let Tier =
     AppRequests
     | where AppRoleName startswith "aigw-"
-    | extend m=todynamic(Measurements)
-    | extend Surface=case(Name has "/models/", "llm", Name has "/toolservers/", "mcp", "other")
-    | summarize Requests=count(), Failed=countif(Success == false), InputTokens=tolong(sum(todouble(m["gen_ai.usage.input_tokens"]))), OutputTokens=tolong(sum(todouble(m["gen_ai.usage.output_tokens"]))), AvgDurationMs=avg(DurationMs) by Gateway="aigateway-tier", Surface, Route=Name, TimeGenerated=bin(TimeGenerated, 1h);
+    | extend Surface=case(Name has "/models/", "llm-request", Name has "/toolservers/", "mcp", "other")
+    | summarize Requests=count(), Failed=countif(Success == false), InputTokens=long(null), OutputTokens=long(null), AvgDurationMs=avg(DurationMs) by Gateway="aigateway-tier", Surface, Route=Name, TimeGenerated=bin(TimeGenerated, 1h)
+    | extend TokenSource="not-reported-in-request-log";
+let TierModelUsage =
+    AzureDiagnostics
+    | where Category == "RequestResponse" and ResourceProvider =~ "MICROSOFT.COGNITIVESERVICES"
+    | extend p=parse_json(properties_s)
+    | where isnotempty(aigwPrincipalId) and tostring(p.callerObjectId) =~ aigwPrincipalId
+    | project TimeGenerated, BackendResourceId=tostring(_ResourceId), BackendRequestId=CorrelationId, ModelName=tostring(p.modelDeploymentName), InputTokens=tolong(p.promptTokens), OutputTokens=tolong(p.completionTokens)
+    | where isnotempty(BackendRequestId) and isnotempty(ModelName) and isnotnull(InputTokens) and isnotnull(OutputTokens)
+    | summarize arg_max(TimeGenerated, ModelName, InputTokens, OutputTokens) by BackendResourceId, BackendRequestId
+    | summarize Requests=count(), InputTokens=sum(InputTokens), OutputTokens=sum(OutputTokens) by Gateway="aigateway-tier", Surface="llm", Route=strcat("model=", ModelName), TimeGenerated=bin(TimeGenerated, 1h)
+    | extend Failed=long(null), AvgDurationMs=real(null), TokenSource="Foundry-observed (gateway managed identity)";
 let TierMcp =
     ApiManagementGatewayMCPLog
     | summarize Requests=count(), Failed=countif(isnotempty(Error)), InputTokens=long(null), OutputTokens=long(null), AvgDurationMs=real(null) by Gateway="mcp-resource-log", ResourceId=tostring(_ResourceId), Surface="mcp", Route=strcat(McpServerEndpoint, " ", Method), TimeGenerated=bin(TimeGenerated, 1h);
 let StandardV2 =
     ApiManagementGatewayLlmLog
-    | summarize Requests=count(), Failed=long(0), InputTokens=sum(tolong(PromptTokens)), OutputTokens=sum(tolong(CompletionTokens)), AvgDurationMs=real(null) by Gateway="apim-standard-v2", Surface="llm", Route=strcat("model=", ModelName), TimeGenerated=bin(TimeGenerated, 1h);
+    | summarize TimeGenerated=max(TimeGenerated), ModelName=take_anyif(ModelName, isnotempty(ModelName)), InputTokens=sum(tolong(PromptTokens)), OutputTokens=sum(tolong(CompletionTokens)) by ResourceId=tostring(_ResourceId), CorrelationId
+    | summarize Requests=count(), Failed=long(null), InputTokens=sum(InputTokens), OutputTokens=sum(OutputTokens), AvgDurationMs=real(null) by Gateway="apim-standard-v2", Surface="llm", Route=strcat("model=", ModelName), TimeGenerated=bin(TimeGenerated, 1h)
+    | extend TokenSource="APIM LLM log";
 let AgentSpans =
     AppDependencies
     | extend p=todynamic(Properties)
     | where isnotempty(tostring(p["gen_ai.operation.name"]))
     | summarize Requests=count(), Failed=countif(Success == false), InputTokens=sum(tolong(p["gen_ai.usage.input_tokens"])), OutputTokens=sum(tolong(p["gen_ai.usage.output_tokens"])), AvgDurationMs=avg(DurationMs) by Gateway=strcat("hosted-agent:", AppRoleName), Surface=tostring(p["gen_ai.operation.name"]), Route=tostring(p["gen_ai.request.model"]), TimeGenerated=bin(TimeGenerated, 1h);
-union isfuzzy=true Tier, TierMcp, StandardV2, AgentSpans
-| project TimeGenerated, Gateway, Surface, Route, ResourceId, Requests, Failed, InputTokens, OutputTokens, AvgDurationMs
+union isfuzzy=true Tier, TierModelUsage, TierMcp, StandardV2, AgentSpans
+| project TimeGenerated, Gateway, Surface, Route, ResourceId, Requests, Failed, InputTokens, OutputTokens, AvgDurationMs, TokenSource
 | order by TimeGenerated desc, Gateway asc, Surface asc
 ```
 
@@ -489,12 +526,17 @@ union isfuzzy=true Tier, TierMcp, StandardV2, AgentSpans
 | What you want | Where it lands |
 |---|---|
 | LLM call (model, duration, success) | `AppRequests`, `AppRoleName` `aigw-<name> <region>`, `Name` `POST /default/models/openai/v1/...` |
-| Tokens | `AppRequests.Measurements["gen_ai.usage.input_tokens"]` and `["gen_ai.usage.output_tokens"]` |
-| MCP tool call | `AppRequests` (`/default/toolservers/<name>/mcp`) and `ApiManagementGatewayMCPLog` (`ServerName`, `ToolName`, `Method`, `Error`) |
+| Tokens used by the workbook | **Foundry-observed:** `AzureDiagnostics`, category `RequestResponse`, `properties_s.promptTokens` / `completionTokens`, matched by `callerObjectId` to the tier's managed identity |
+| Native tier token metric | Separate `gen_ai_client_token_usage` metric, queried with PromQL; unavailable in the checked destination, not replaced with zero |
+| MCP tool call | Tier `AppRequests` / `AppDependencies`, plus native MCP diagnostics where emitted. Selected fresh traces did **not** join backend `tool_audit` hops; do not imply a complete chain. |
 | Content-safety and forward-request hops | `AppDependencies` |
 
 > [!CAUTION]
-> No diagnostic setting is deployed for the tier because no tier-specific resource-log category was confirmed. Do not claim the tier provides Entra-validated caller identity: it authenticates with a gateway-scoped runtime `api-key`, so `agent_principal` is empty by design.
+> Native tier request-log counters were **zero despite positive response usage** on 2026-10-19. The workbook therefore labels the verified backend source **AI Gateway - Foundry-observed**. This does not repair or prove native metric export or token-limit enforcement. Runtime `api-key` authentication still does not establish a human/agent identity; the backend's `callerObjectId` establishes the gateway managed identity only.
+
+Queries 02 and 11 require `aigwPrincipalId` to be the tier's **principal/object ID**, not its client/application ID. Bicep binds it into the workbook and query pack; the console receives `AIGW_PRINCIPAL_ID`, and the CLI reads `aigwPrincipalId` from local IDs or that environment variable. Blank binding or missing diagnostics means unavailable attribution, never all callers. Backend rows are deduplicated by resource ID and correlation ID before summing counters. No token values come from agent spans, traffic estimates or the array-valued `AzureOpenAIRequestUsage` billing records.
+
+Query 11 retains native **`llm-request`** rows with null counters and `TokenSource=not-reported-in-request-log`, alongside separate backend **`llm`** rows. These are overlapping request observations, not additional requests to add together. Model requests through APIM are excluded from the tier backend source by the caller-identity match.
 
 Payload logging is off by default. Never read `context.Response.Body` in an MCP policy - it buffers the response and breaks streaming ([MCP in API Management](https://learn.microsoft.com/en-us/azure/api-management/mcp-server-overview)).
 
@@ -514,7 +556,11 @@ Payload logging is off by default. Never read `context.Response.Body` in an MCP 
 
 `infra/monitoring/workbook.json` is the layout, not a standalone import: `modules/workbook.bicep` binds the 11 saved KQL files into their panels at deployment, supplies the workspace scope, and substitutes the escaped trace input for query 04's SDK parameter declaration. Every panel also receives source-level `TimeGenerated {TimeRange:query}` filters, before joins, aggregation, time bins and row limits; filtering a finished totals table or binned timestamp would be too late. This includes inline audit/content/coverage queries. The Overview displays the selected label, start/end and bucket size. The saved KQL remains usable unchanged by the query pack and console, whose callers supply their own time range.
 
-The two overview charts derive series from query 11, filtering gateway LLM and hosted-agent **chat** observations separately; parent `invoke_agent` spans and MCP rows are not added to the agent chart. For the charts only, the hourly source bins become `bin_at` buckets using `{TimeRange:grain}`, anchored at `{TimeRange:start}`. In KQL, Workbook start/end parameters already expand to datetime expressions: use `from {TimeRange:start} to {TimeRange:end}` directly, **not** `datetime({TimeRange:start})`, which produces an invalid nested expression. A single `Tokens` measure is segmented by a `Series` label such as `apim-standard-v2 / input` or `agent-maf / output`, rather than combining two Y measures with grouping.
+The two overview charts derive series from query 11, filtering gateway LLM and hosted-agent **chat** observations separately; parent `invoke_agent` spans and MCP rows are not added to the agent chart. For the charts only, the hourly source bins become `bin_at` buckets using `{TimeRange:grain}`, anchored at `{TimeRange:start}`. In KQL, Workbook start/end parameters already expand to datetime expressions: use `from {TimeRange:start} to {TimeRange:end}` directly, **not** `datetime({TimeRange:start})`, which produces an invalid nested expression. A single `Tokens` measure is segmented by a `Series` label such as `APIM v2 / input` or `agent-maf / output`, rather than combining two Y measures with grouping.
+
+**APIM labels are not SKU discovery.** The chart uses `APIM v2`; the saved-query lane identifier `apim-standard-v2` remains unchanged for compatibility. The 2026-10-20 APIM-focused validation observed a live **BasicV2** service even though azd requests **StandardV2**. Confirm the actual resource tier before discussing tier-specific networking or other capabilities.
+
+**Count model requests, not diagnostic fragments.** APIM LLM logging can emit multiple records for one `CorrelationId`, with the model name absent on message fragments. Queries 02/11 merge parts by resource/correlation ID, retain the reported model name and sum counters before counting requests; query 11 then bins by the latest observed fragment timestamp. Missing failure/latency measurements remain null; use gateway health logs for those values. The APIM-focused run produced **18 log records for 6 model requests**, with **3,612 input / 374 output tokens** matching the six identity-attributed Foundry requests and the two hosted response totals. This is selected-window reconciliation, not an added cross-layer consumption total or a universal per-request join.
 
 `make-series` fills empty buckets across the selected start/end for each observed series, preventing the time axis from shrinking to the few timestamps that had traffic ([Workbook time-series guidance](https://learn.microsoft.com/en-us/azure/azure-monitor/visualize/workbooks-chart-visualizations#summarize-vs-make-series)). Zero-filled gaps are not new observations or proof of a passing control. If the selected window has no token observations, no synthetic gateway/agent series is created and the no-data message is shown. Each chart limits the intermediate result to **200 series**, then expands the timestamp/token arrays together with `mv-expand` into scalar **datetime `TimeGenerated`**, **long `Tokens`**, and **string `Series`** columns. Do not bind the dynamic arrays directly to chart axes: they can render as JSON category labels with zero numeric totals. The detail-table 200-row limit is not applied to the expanded chart points; for example, four series across seven days at three-hour intervals require all **224 points**. Saved-query detail panels return at most **200 rows**, hosted content **50**, and platform audit **100**, within the selected range. The workbook, query pack and console share maintained KQL rather than hand-copied versions. Updating the layout/KQL requires a workbook deployment; changing console application code alone does not update the workbook.
 
@@ -526,7 +572,7 @@ The two overview charts derive series from query 11, filtering gateway LLM and h
 | `who-called-which-tool` | Audit identity, tool and decision | What identity/caller was actually recorded? | Query 01 |
 | `token-usage` | Token usage by source and recorded identity/model | Which layer recorded token consumption? | Query 02; names and application IDs are distinct |
 | `standard-v2-vs-aigw-tier` | Gateway and hosted-agent observations | What did each telemetry layer record? | Query 11; MCP rows include `ResourceId`, not an assumed tier label |
-| `tool-calls` | MCP methods, tools and sessions | Which MCP requests and tools were recorded? | Query 05 |
+| `tool-calls` | Native MCP methods, tools and sessions (conditional) | Which native MCP diagnostic events were emitted? Empty is legitimate for the sample's APIM HTTP proxies. | Query 05 unchanged; primary sample proof is 01/04 |
 | `denied-throttled` | Denied and throttled | Where are controls firing? | Query 03 |
 | `latency-5xx` | Gateway latency and 5xx (P95 + failures) | What latency and failures were observed? | APIM `TotalTime` and tier `AppRequests.DurationMs`, both milliseconds |
 | `llm-sample` | LLM log sample | What do prompts and completions look like? | Query 06 |
@@ -545,6 +591,8 @@ LLM and hosted-agent message panels expose sensitive content already present in 
 ## Alerts
 
 <img src="./assets/icons/alerts.svg" width="28" alt=""/> `modules/alerts.bicep` creates scheduled-query rules ([log search alerts](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-types#log-alerts)) when `ENABLE_ALERTS=true`. All rules use **severity 2**, evaluate every 5 minutes (`PT5M`) over a 15-minute window (`PT15M`). An action group `ag-hosted-agent-gateway` is created only when `ALERT_EMAIL` is set; without it the rules still fire and are visible in the portal.
+
+Rule names describe investigation targets, not validated enforcement. In particular, content-related text or a backend 403 can have another origin; the content-safety rule does not prove APIM has a content-safety policy. Confirm source, cause and an actual alert event separately.
 
 | Alert | Icon | Condition | Threshold | Severity |
 |---|---|---|---|---|
@@ -587,29 +635,31 @@ LLM and hosted-agent message panels expose sensitive content already present in 
 
 ## Worked example: "who called which tool?"
 
-Scenario: a field operator asks the agent to create a work order after checking part availability. Query 01 returns one row per tool call. The values below are **illustrative** (identifiers shortened).
+Synthetic scenario: a field operator asks an agent to create a work order after checking part availability. The values below are a **conceptual delegated/OBO illustration**, not browser-console evidence or a literal query-01 result. Query 01 starts from backend tool-audit rows; a gateway-denied request may never reach the backend and instead appears in gateway/denial evidence. Token attribution is unknown unless a real model/token join exists.
 
 | Time (UTC) | Human `oid` | Agent `appid` | Gateway | Tool | Decision | Tokens | Trace |
 |---|---|---|---|---|---|---|---|
-| 14:02:11 | `1111...` | `aaaa...` | `apimv2` | `check_availability` | allowed | 412 | `4bf9...` |
-| 14:02:19 | `1111...` | `aaaa...` | `apimv2` | `create_record` | allowed | 655 | `4bf9...` |
-| 14:03:40 | `1111...` | `aaaa...` | `apimv2` | `delete_record` | **denied** (not on the allow-list) | 0 | `71c2...` |
+| 14:02:11 | `1111...` | `aaaa...` | `apimv2` | `check_availability` | allowed | unknown unless joined | `4bf9...` |
+| 14:02:19 | `1111...` | `aaaa...` | `apimv2` | `create_record` | allowed | unknown unless joined | `4bf9...` |
+| 14:03:40 | `1111...` | `aaaa...` | `apimv2` | `delete_record` | **gateway-denied**; inspect query 03 | unknown | `71c2...` |
 
 <table>
 <tr>
 <td width="56"><img src="./assets/icons/managed-identity.svg" width="40" alt=""/></td>
-<td><b>How to read it.</b> The <i>human</i> column comes from the delegated user (<code>x-gw-user-oid</code>), the <i>agent</i> column from the agent identity (<code>x-gw-agent-appid</code>). The <code>trace</code> value is the key you paste into query 04 (or the workbook trace tile) to see the model call, the MCP call, the backend span and the gateway row on one timeline.</td>
+<td><b>How to read it.</b> A human column requires actual delegated context (<code>x-gw-user-oid</code>); <code>x-gw-agent-appid</code> identifies the validated caller and is an agent only when that agent called. Paste a real trace value into query 04 to inspect whichever model, MCP, backend and gateway rows actually link. S2 console OBO is a separate read-only console-to-APIM path, not this conceptual hosted-agent/write chain.</td>
 </tr>
 </table>
 
 1. Run `python scripts/run_audit_queries.py --ids demo-ids.local.json --query 01` and pick a row.
 2. Copy its `trace_id`, then run `python scripts/run_audit_queries.py --ids demo-ids.local.json --query 04 --trace-id <trace_id>`.
-3. Confirm the denied call also appears in query 03 and, with alerts enabled, as a `denied-tool-calls` alert.
+3. Inspect query 03 for the gateway denial and separately check any `denied-tool-calls` alert. Neither an enabled rule nor missing rows proves firing or enforcement.
 
 > [!TIP]
 > If query 01 shows `agent_principal` empty with `caller = aigw-runtime-key:agents`, the call went through the AI Gateway tier - the expected, documented limitation. Switch to query 11 (or 02) for token and model telemetry on that lane.
 
 ## Live evidence
+
+The following counts are the preserved **2026-10-02 mixed-gateway report**, not proof that today's APIM HTTP proxies emit native MCP diagnostics or every preview trace joins. Current selected APIM joins and incomplete preview correlation are recorded in the [2026-10-20 limited follow-up](./04-testing.md#limited-follow-up-2026-10-20).
 
 ![live-tested](./assets/badges/live-tested.svg) for **both gateway lanes** (APIM Standard v2 and the AI Gateway tier) and **both agents** (MAF and LangGraph), run `fhagl1002` on 2026-10-02 in `eastus2`. See [04 - Testing](./04-testing.md#live-validation-2026-10-02).
 
@@ -663,4 +713,4 @@ Next: [10 - Enterprise posture and scale](./10-enterprise-posture-and-scale.md) 
 
 ---
 
-*Last updated: 2026-10-15*
+*Last updated: 2026-10-20*

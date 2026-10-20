@@ -33,37 +33,37 @@
     {
       "step": "S1",
       "segment": "Hosted agents",
-      "prompt": "Check readiness and ask the agent what governed tools it can use.",
+      "prompt": "List the governed catalog and records tools you can use. Do not create or update data.",
       "expectedTool": null,
-      "assertion": "readiness endpoint returns ok and response identifies catalog or records tools"
+      "assertion": "inspect a completed Responses payload; verify readiness and actual tool use separately"
     },
     {
       "step": "S2",
       "segment": "Identity",
-      "prompt": "Invoke through the gateway with an agent token and traceparent.",
+      "prompt": "Compare no-credential denial with an authenticated direct-model call and inspect the actual caller in audit rows.",
       "expectedTool": null,
-      "assertion": "audit record includes agent_principal and trace_id"
+      "assertion": "no-credential call returns 401; inspect authenticated caller and trace evidence without assuming human OBO or agent identity"
     },
     {
       "step": "S3",
       "segment": "Tools/MCP",
-      "prompt": "Do we have enough DEV-200 units for today's incident triage desk?",
+      "prompt": "Check availability of 2 units of DEV-200 for a synthetic incident triage desk. Use catalog tools only; do not create or update data.",
       "expectedTool": "check_availability",
-      "assertion": "response includes available quantity and readiness and location"
+      "assertion": "inspect the catalog result for requested quantity 2, available quantity, readiness and location"
     },
     {
       "step": "S4",
       "segment": "Scale/posture",
-      "prompt": "Loop calls until the gateway token-limit policy returns 429.",
+      "prompt": "Run a separately approved bounded throttle probe and inspect gateway logs to identify any limiting policy.",
       "expectedTool": null,
-      "assertion": "gateway returns throttling and audit keeps trace id"
+      "assertion": "an observed 429 requires policy attribution; no 429 within the bounded budget is not a pass"
     },
     {
       "step": "S5",
       "segment": "Observability",
       "prompt": "Run audit query 01 and trace query 04 for the generated trace id.",
       "expectedTool": null,
-      "assertion": "query output joins agent, tool, backend, decision, and time"
+      "assertion": "inspect evidenced trace hops, principals and decisions; record missing joins and do not treat row presence as an end-to-end pass"
     }
   ]
 }

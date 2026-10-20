@@ -16,19 +16,20 @@ This page is for the engineer who has just deployed (or is about to deploy) the 
 
 ## Browser console acceptance checks
 
-**The console is deployed with limited live checks; the complete browser acceptance matrix is still pending.** The [2026-10-16 follow-up](#live-follow-up-2026-10-16) distinguishes observed behavior from remaining checks. Do not extend the historical 2026-10-02 pass matrix to it. After deployment, run the [browser walkthrough](./11-demo-walkthrough.md#browser-console-s1-s5) and record each result with its actual gateway, response details and trace ID.
+**The console is deployed with limited live checks; the complete browser acceptance matrix is still pending.** The [2026-10-20 limited follow-up](#limited-follow-up-2026-10-20) and earlier dated follow-ups distinguish observed behavior from remaining checks. Do not extend the historical 2026-10-02 pass matrix to it. After deployment, run only authorized operations from the [browser walkthrough](./11-demo-walkthrough.md#browser-console-s1-s5) and record each result with its actual gateway, response details and trace ID.
 
 | Check | Expected behavior / evidence to collect |
 |---|---|
 | Sign-in boundary | Anonymous access requires Easy Auth sign-in; only the deploying human's tenant + object ID can use the console. Verify another same-tenant user is denied, not merely that a login page appears. Exercise ACA's `X-MS-CLIENT-PRINCIPAL-ID` header and the optional full claims header; missing identity, wrong owner/provider, malformed claims, and conflicting owner/tenant claims must be rejected. |
+| Session guide / configuration | Expand the collapsed eight-item presenter guide; discussion, synthetic scenario, pilot and closeout must be distinct from the five live S1-S5 workflows. The guide displays the maintained reference image at `/reference/architecture.png`, not discovered live topology. Action buttons remain disabled until configuration loads; a provisioning snapshot is not agent readiness. |
 | Secret boundary | Browser traffic/page source contains no app credential, managed-identity token or tier runtime key. Inspect locally without publishing secret-bearing captures. The backend uses SDK/HTTP clients, not CLI/scripts. |
 | Agent submissions | Choose MAF or LangGraph, enter a prompt, and explicitly confirm **every** submission. No request before confirmation; tools may mutate data even for an apparently read-only prompt. Responses invocation only, **no readiness GET**. Detailed response and trace ID are visible. A protocol success is not proof of selected-tool use. |
 | Routing | Agent requests keep deployed `HOSTED_DEFAULT_GATEWAY`; changing the direct gateway selector changes only direct S2-S4 checks. Displayed agent gateway is a **provisioning snapshot**, not live discovery. Agent-only deployment can leave it stale; reprovision to sync. Confirm actual routing in logs. |
 | S2 | Selected gateway returns 401 without credentials, then accepts a valid console-backend credential/model request. APIM uses console managed identity; tier uses a runtime key. Neither demonstrates OBO or agent identity. |
 | S3 MCP | Initialize, list tools and invoke catalog/records tools through the chosen gateway. JSON arguments derive from live `inputSchema`; inspect/adjust before submitting. `create_record` and `update_record` require explicit write confirmation; no automatic writes. |
-| S3 REST / denial | APIM-only records list/get/create/update with JSON arguments; writes confirmed separately. APIM denied-tool probe expects allowlist 403; distinguish that from unrelated 403s. Tier REST/denied-tool checks report `unavailable`, not equivalent coverage. |
+| S3 REST / denial | APIM-only records list/get/create/update with JSON arguments; use an ID returned by a real list before get/update and confirm writes separately. APIM denied-tool probe expects allowlist 403; distinguish that from unrelated 403s. Tier selection disables these controls; tier REST/denied-tool checks are `unavailable`, not equivalent coverage. |
 | S4 | Separate burst confirmation, 1-120 requests with concurrency at most 8; dispatch window ≤90 seconds, per-request timeout ≤15 seconds. Already-started requests can finish at the deadline. A returned 429 is evidence only for the selected gateway; do not infer token-limit versus upstream/rate-limit origin without logs. No observed 429 means `not_run`, not `passed`. |
-| S5 | Only saved KQL 01-11; API timespan one hour, appended `take 200`. Query 04 accepts trace ID. “Passed” means rows returned, not a validated audit assertion; empty results report `not_run` with ingestion/no-evidence guidance. No arbitrary KQL input. |
+| S5 | Readable saved-query labels 01-11; API timespan one hour, appended `take 200`. Query 04 accepts trace ID. “Passed” means rows returned, not a validated audit assertion; empty results report `not_run` with ingestion/no-evidence guidance. No arbitrary KQL input. A workbook link is present only when `WORKBOOK_ID` is configured; missing configuration is shown honestly. |
 | Manual / unavailable lanes | No simulated private-network checks; show topology and verify manually. OBO and optional ACA agent comparison remain manual/unavailable unless explicitly deployed. |
 | Isolated browser | With `NETWORK_ISOLATION=true`, access the internal ACA console using VNet/VPN connectivity and private DNS; public browser failure is not a live network-isolation pass. |
 
@@ -59,7 +60,7 @@ python -m pip install playwright==1.58.0
 python -m pytest tests\test_demo_console_browser.py -q
 ```
 
-The browser test uses a mocked runner and synthetic authentication context, **not Azure Easy Auth or live gateways**. It skips when Playwright is absent. A local UI pass is not proof of Azure sign-in, RBAC, network connectivity or deployment health; the acceptance checks above still need live execution.
+The browser test uses a mocked runner and synthetic authentication context, **not Azure Easy Auth or live gateways**. It skips when Playwright is absent. The updated fixture covers all action categories, including read/REST/denial paths, the agenda/reference/workbook surfaces and initialization failure. That is still fixture evidence, not actual Entra sign-in or deployed GUI acceptance. A local UI pass is not proof of Azure RBAC, network connectivity or deployment health; the acceptance checks above still need live execution.
 
 ## Live follow-up (2026-10-16)
 
@@ -84,6 +85,84 @@ These are scoped follow-up checks, **not** a new all-green S1-S5 matrix:
 
 The workbook and console have different time controls: the workbook defaults to 24 hours and supports presets/custom ranges; console S5 intentionally remains a fixed **one-hour** API query window. See [workbook deployment](./03-deployment.md#updating-only-the-workbook), [query/layout contract](./09-monitoring-and-audit.md#workbook), and [symptom fixes](./05-troubleshooting.md#browser-demo-console).
 
+### AI Gateway token-source follow-up (2026-10-19)
+
+Two bounded, non-mutating model requests (Responses and Chat Completions) returned **26 input + 21 output tokens** combined. Tier `AppRequests` emitted zero counters, and the linked native PromQL token metric returned no samples. Foundry `RequestResponse` logs independently recorded the exact response totals; their `callerObjectId` matched the tier's live managed-identity principal ID, not the APIM identity.
+
+The corrected chart uses those **Foundry-observed** counters. Verify queries 02/11 agree with the backend totals after per-resource/request-ID deduplication; a different or blank principal ID must not select other callers. Missing counters are excluded as unavailable; a recorded numeric zero remains valid. Native `llm-request` rows must retain null counters, not overwrite the backend totals. This does **not** validate native metric export or token-limit enforcement. Keep both gateway observation layers separate from hosted-agent chat spans.
+
+The correction was deployed to the existing workbook, query pack and console only. Read-back confirmed both saved-query identity bindings. Executing the **persisted** gateway chart for 22:20-22:40 UTC with a five-minute grain returned eight scalar points across the input/output series, totaling 26/21; the empty 22:35-22:40 UTC selection returned no tier series. Live KQL fixtures also verified deduplication, real zero counters, missing-counter exclusion, and blank/wrong identity exclusion. Inside the ready console revision, the deployed application hash matched the local source and S5 queries 02/11 independently returned 26/21 using the console's managed identity. Health remained HTTP 200 and anonymous configuration access HTTP 401. The 101 targeted regressions passed. This verifies saved query execution and runtime binding, **not** a new portal/browser visual acceptance pass; agent routing was unchanged.
+
+## Limited follow-up (2026-10-20)
+
+This table records the initial review checkpoint. The later [APIM-focused hosted-read validation](#apim-focused-hosted-read-validation-2026-10-20) below supersedes its unexecuted-S1 status for the two approved APIM read scenarios, not for browser sign-in, writes, throttling or preview acceptance.
+
+The console-only `azd` deployment completed. The checks below include the console-managed-identity runner, deployed-file verification and actual loopback HTTP GET/POST requests to the updated console. Loopback requests supplied trusted platform headers **inside its container**, **not a real human Entra browser session**. This verifies the deployed revision within those boundaries, not complete real-browser S1-S5 acceptance.
+
+| Surface | Observed | Evidence boundary / remaining check |
+|---|---|---|
+| Existing console | Ready deployed console retained owner-only authentication. | Not a new deployer/second-user browser sign-in pass or a multi-user authorization proof. |
+| Console-only deployment | Deployment completed; **eight deployed hashes** matched the maintained source/static UI/reference PNG/canonical profile/queries 02 and 11. | Confirms deployed artifact agreement, not live hosted-agent execution or human browser authentication. |
+| Workbook runtime binding | `WORKBOOK_ID` is bound to the existing verified workbook on the ready updated revision; the configured workbook URL was verified through deployed loopback HTTP. Routing, key delivery and token attribution were preserved. | Link/configuration verification does not establish a real human portal/browser session or complete S1-S5 acceptance. |
+| Deployed guide and query UI | Actual loopback HTTP GET/POST verified the eight-item agenda, reference endpoint, **11 readable query labels** and configured workbook URL. | Trusted platform headers were supplied **inside the container**; this was not a real human Entra browser session. |
+| Deployed records controls / reads | Loopback HTTP verified **four enabled records business tools per lane**, one disabled extra preview health tool, REST collection read and item get using an ID from the live list. | Read-only deployed API/UI evidence; not record-write acceptance or a human browser interaction. |
+| Public and Entra boundaries | Public health returned **200**; anonymous configuration/reference requests returned **401**. Live Entra metadata separately confirmed single-tenant configuration, the exact callback and ID-token issuance enabled. | Configuration and unauthenticated HTTP checks do not replace a real deployer/second-user browser sign-in test. |
+| Hosted-agent metadata | Both endpoints returned **200**, `state=enabled`, `configuration_state=enabled` and instance identities present. | Metadata access is not a live S1 invocation, readiness GET, completed Responses run or agent-to-gateway/tool proof. |
+| Hosted-agent route configuration | Both hosted definitions independently reported `HOSTED_DEFAULT_GATEWAY=apimv2`, matching the GUI provisioning snapshot. | Confirms configured values, not a live agent request path, route switch or S1 invocation. |
+| Direct MCP | `tools/list` and read operations succeeded for catalog and records through **both** APIM and the preview gateway using the console runner. | Direct credentials/protocol evidence, not a hosted-agent prompt, agent tool choice, route switch or customer integration. |
+| Missing credentials | Both gateways returned exactly **401** for no-credential probes. | Proves rejection of those requests only; does not establish OBO or fine-grained authorization. |
+| Direct S2 model requests | One benign console-credential model call per gateway completed **200**. Response-reported usage: APIM **13 input / 15 output**; preview **13 input / 17 output**. | These are direct S2 credential paths, **not live hosted-agent S1 approval or execution**. The saved-chart reconciliation below is separate evidence; keep today's usage distinct from the dated 2026-10-19 sample. |
+| Saved workbook reconciliation | The saved workbook's current-hour **scalar** chart independently reconciled today's S2 response totals: APIM **13 input / 15 output**; tier **13 input / 17 output**, **Foundry-observed**. | Verifies those persisted chart/source totals, not native tier metric export, every preview backend trace hop or a live hosted-agent turn. |
+| APIM allowlist | The denied-tool probe returned **403**. | APIM allowlist evidence only; preview-tier denial parity is not implemented. |
+| APIM REST | Collection read returned **200**; item retrieval using an ID from the live list also succeeded. The earlier guessed-ID request returned **404**. | The 404 was an unknown identifier, not a routing failure. These are read-only direct-console checks; no record writes were run. |
+| Advertised versus demo-enabled tools | Preview records discovery advertised five operations, including `records_healthz_healthz_get`; the console intentionally supports four records business tools. | Unsupported advertised operations remain visible but disabled / not demo-enabled; the full schema stays in discovery JSON and the backend allowlist is unchanged. |
+| Saved KQL | All **11** saved queries executed without query errors. Many had no current-hour events. | Query execution is not an audit assertion. Empty sources remain `not_run` / no current evidence; do not convert them into passes. |
+| Selected fresh APIM traces | Catalog and records requests joined backend `tool_audit` with `ApiManagementGatewayLogs`. | Use **APIM queries 01/04 as the primary session trace evidence**. These selected direct-request joins do not establish a live S1/agent chain or every request path. |
+| Selected fresh preview traces | Returned `AppRequests` / `AppDependencies` only; backend `tool_audit` hops were not joined. | **Incomplete end-to-end correlation proof**, not a full trace pass. Do not imply every preview hop is joined. |
+| Unexecuted work | **No live agent prompts, record writes or throttle bursts were authorized or executed during this review.** | No S1 completion, agent-route/tool proof, write acceptance, throttle enforcement, isolated networking or complete S1-S5 acceptance is claimed. |
+
+The review also confirmed design limits: APIM has coarse JWT validation plus a global tool allowlist, not delegated/per-user record authorization; public backend ingress/trust is a demo limitation. `ENABLE_CONTENT_SAFETY` is wired to **preview-tier policy cards**, not an implemented APIM `llm-content-safety` policy. Error-keyword matches, model filtering and backend 403s must not be presented as proven APIM content-safety enforcement.
+
+The Standard-v2 `catalog-mcp` and `records-mcp` resources are **HTTP APIs (`apiType=http`)**, policy-proxying the sample's backend MCP adapters. The records MCP adapter wraps the same record business functions; it is not an APIM-managed OpenAPI-generated MCP server. The **preview records tool server is OpenAPI-generated and dispatches REST**. Native `ApiManagementGatewayMCPLog` / query 05 can therefore have no events for the APIM HTTP proxies; that is not broken wiring. Keep query 05 conditional and unchanged, with no synthetic fallback.
+
+At that initial checkpoint, local verification completed with **145 tests passed, no skips**, including all **eight official-host contract checks** after dependencies were restored. JavaScript syntax and the complete Bicep compile also passed. Those local results are separate from deployed hash/loopback HTTP evidence: no hosted-agent prompt, record write or throttle burst had yet run. The later APIM-only evidence follows; complete real-human Entra browser S1-S5 acceptance and preview backend joins remain incomplete.
+
+## APIM-focused hosted-read validation (2026-10-20)
+
+**Session baseline: APIM. Preview is deferred.** With approval for the bounded read-only scenario, the deployed console backend invoked each hosted framework once. No preview backend calls, gateway/SKU changes, record writes or throttle bursts were requested.
+
+| Surface | Confirmed evidence | Boundary |
+|---|---|---|
+| Actual gateway tier | The live APIM service reports **BasicV2**, ready; the azd environment still requests **StandardV2**. | This is configuration drift, not Standard-tier feature acceptance. No upgrade was performed. Review the intended tier and cost before `azd provision`; it can reconcile the service to the configured target. |
+| Hosted routes | Both deployed agent definitions select `apimv2`. | The direct GUI selector does not change those definitions. |
+| MAF and LangGraph | Each returned HTTP **200**, a **completed** Responses payload, actual `search_items` then `check_availability` function calls, and a matching tool output for **PRT-100**, requested **2**, available **42**, `can_fulfill=true`. | Values matched a fresh direct catalog control. This is the synthetic sample, not customer inventory or a quality/load benchmark. |
+| Agent identity | The selected availability audit's object ID **and** application/client ID matched the corresponding freshly read agent-instance identity, not the console principal. `human_principal` was absent. | Demonstrates those agent workload callers; not human OBO or per-record business authorization. |
+| Selected trace joins | The actual console-generated trace for each invocation returned `AppRequests`, `AppDependencies`, `AppTraces`, `AppGenAIContent`, `ApiManagementGatewayLogs` and backend `tool_audit` through query 04. Both results were below the 200-row cap. | Confirms the selected agent-to-tool chains and APIM/backend correlation, not every possible path, outage case or native LLM-log correlation. |
+| Model-log reconciliation | The exact validation window contained **18 APIM LLM diagnostic records for 6 distinct model requests**. Gateway counters, six Foundry request records authenticated as the APIM managed identity, and the two response-reported totals agreed on **3,612 input / 374 output tokens**. | Split log parts are not extra requests. Queries 02/11 count correlations rather than raw records; token aggregation is unchanged. Do not add the observation layers together or infer a universal per-request join. |
+| Read-only evidence | Returned function-call ledgers contained only catalog reads; neither selected trace contained `create_record` / `update_record` audit events. | Record-write and throttle acceptance remain separate, approval-gated work. Prompt wording alone is not an authorization control. |
+| Browser boundary | A separate real Edge session reached Entra sign-in, but deployer sign-in was not completed. The approved agent runs used the deployed console `Runner` with its managed identity. | These are real backend/agent/APIM executions, **not a human-browser acceptance pass**. No sign-in, password or MFA bypass was used. |
+| Presentation labels | GUI controls and chart series use **APIM v2**, not an inferred Standard SKU. | The legacy query identifier `apim-standard-v2` is retained for compatibility; it is a lane identifier, not tier discovery. Recommended reference-architecture tiers are separate from the observed live tier. |
+
+Use this APIM read path for the current session, with queries **01/04** for identity/tool/trace evidence and **02/11** for separately scoped token observations. Preview backend correlation remains deferred and unchanged. Keep the human-browser sign-off, optional writes, policy-attributed throttling, private networking and production authorization requirements explicitly open.
+
+The request-count correction was published to the deployed console query bundle, saved queries **02/11**, and the four affected workbook queries; other panels and preview attribution were preserved. Read-back and execution through the console's own managed identity confirmed **6 requests / 3,612 input / 374 output tokens** for the original validation window. Live KQL fixtures additionally covered split parts with missing model names, genuine zero-usage requests and matching correlation IDs on different resources. GUI/chart labels are deployed as **APIM v2**; no APIM SKU upgrade or preview backend change was made.
+
+## Console-to-APIM OBO implementation (2026-10-20)
+
+S2 now separates anonymous, console managed identity, hosted-agent instance identity, and explicit **user through console (OBO)**. OBO is not inferred from a browser sign-in or a token's user claims: the backend obtains a user access token for the console API through a separate confidential sign-in client, then performs the actual OBO exchange to the gateway API. The hosted agents remain app-only.
+
+| Surface | Verified | Boundary / remaining sign-off |
+|---|---|---|
+| Owned Entra setup | The single-tenant interactive client, `Console.Access` / `Gateway.Access`, exact callback, API v2 audiences, narrow client preauthorizations and ACA credential references were configured. Unrelated app permissions were preserved; no tenant-wide Graph grant was added. | Configuration is not a completed user grant or an OBO/audit pass. A real allowed-deployer sign-in is required. |
+| Runtime / audit updates | Console, catalog and records audit images were deployed; the existing record set matched seed before restarting its memory-only backend. Existing identity, routes, workbook and preview key-delivery settings were preserved. | No business-data write or hosted-agent user delegation is added. APIM remains Basic v2; the configured Standard v2 drift is unchanged. |
+| Authentication contract | Real MSAL initialization produced the expected tenant, separate sign-in client, console API scope, S256 PKCE and `form_post` callback. Access tokens and client secrets stay server-side; an ID token is not used as the OBO assertion. | The exact callback alone is excluded from platform login. It independently checks browser-bound state, PKCE/nonce, tenant and the allowed user before the APIM probe; other routes retain Easy Auth and same-origin checks. |
+| Fail-closed behavior | Missing-cookie external callback returned **401**. Tests covered state mismatch, wrong user, replay, expiry, cancellation, missing configuration, consent failure and secret/code redaction, with no managed-identity fallback. | The short-lived flow/result state is memory-only on one replica. A restart or expired session requires a new sign-in. |
+| Independent app-only comparison | The deployed managed-identity catalog-discovery probe passed and reported application identity with no delegated user. | This does **not** validate user OBO or manufacture a human audit subject. |
+| User audit surface | Query 01 was published/read back with `human_oid`, optional `human_name` / `human_username`, `identity_type` and `delegated_scopes`; S2 can query that call's exact trace. Both backends derive these from APIM-stamped validated claims. | Friendly fields are optional; the object ID is authoritative. Raw token metadata in S2 must not be treated as an ingested audit pass. Operator identity metadata is real/privacy-relevant; never commit it. |
+| Real interactive OBO | The live console was opened for the deployer to choose **S2 / Sign in and call as user**. | **Not yet claimed as completed:** the user grant, OBO exchange, APIM acceptance and matching human audit rows require real interactive evidence. Do not replace this with an app-only token or an impersonated header. |
+
+The full local suite passed **164 tests** at this implementation checkpoint, including official hosting contracts, OAuth grant/state/ownership tests, ID-token-not-an-assertion/cancellation cases and browser fixtures. Fixtures are not an Entra sign-in or live-user proof. Preview remains deferred; source publication is separate from live authentication acceptance.
+
 ## At a glance
 
 | | Layer | Needs Azure? | Typical runtime | Proves |
@@ -91,7 +170,7 @@ The workbook and console have different time controls: the workbook defaults to 
 | <img src="./assets/icons/code.svg" width="24" alt="code"/> | Unit / offline tests (`pytest`) | No | seconds | Agent contract, audit schema, policy XML, KQL files, config docs coverage |
 | <img src="./assets/icons/policy.svg" width="24" alt="policy"/> | Static IaC and policy checks | No | seconds | Bicep parameter plumbing, quoted azd parameters, policy controls present |
 | <img src="./assets/icons/api-management.svg" width="24" alt="API Management"/> | Gateway validation script | Yes | under a minute | 401 on missing or wrong credentials, 200 with the right one, optional 429 probe |
-| <img src="./assets/icons/foundry-agent-service.svg" width="24" alt="Foundry Agent Service"/> | Demo walkthrough | Yes (or `--dry-run`) | minutes | End-to-end agent, gateway, tool and audit story (S1 to S5) |
+| <img src="./assets/icons/foundry-agent-service.svg" width="24" alt="Foundry Agent Service"/> | Developer walkthrough | Yes for S1; `--dry-run` is offline | minutes | Executed S1 checks a completed Responses payload. Dry-run prints `PLAN`; unimplemented S2-S5 are `NOT_RUN`, and an incomplete live run exits 2. |
 | <img src="./assets/icons/log-analytics.svg" width="24" alt="Log Analytics"/> | Audit queries | Yes | seconds per query | Identity and trace correlation actually landed in logs |
 | <img src="./assets/icons/foundry.svg" width="24" alt="Foundry"/> | Evaluations | Yes | minutes | Agent quality (task adherence, tool use) |
 | <img src="./assets/icons/content-safety.svg" width="24" alt="Content Safety"/> | AI Red Teaming Agent | Yes | minutes to hours | Attack Success Rate against the agent target |
@@ -115,7 +194,7 @@ The workbook and console have different time controls: the workbook defaults to 
 | <img src="./assets/icons/code.svg" width="20" alt="code"/> **Unit / offline** | Audit record, MCP handshake, records API CRUD, hosted-agent contract (`/readiness`, `/responses`; `/invocations` for the local-only protocol), trace propagation, retarget-domain guard | `pytest` | Yes | ![static-only](./assets/badges/static-only.svg) |
 | <img src="./assets/icons/policy.svg" width="20" alt="policy"/> **Static IaC** | Policy XML well-formed and contains `validate-azure-ad-token`, `llm-token-limit`, `llm-emit-token-metric`; MCP policy is inbound-only; azd parameters quoted; `main.bicep` params all passed by `azd.bicep`; KQL files reference known tables | `pytest tests/test_policies.py tests/test_infra_static.py tests/test_kql_queries.py tests/test_configuration.py` | Yes | ![static-only](./assets/badges/static-only.svg) |
 | <img src="./assets/icons/api-management.svg" width="20" alt="API Management"/> **Gateway validation** | 401 without a credential, success with one, per-gateway tool names, concurrent 429 probe | `python scripts/validate_gateway.py ...` | No | ![live-tested](./assets/badges/live-tested.svg) both gateways, see [Live validation](#live-validation-2026-10-02) |
-| <img src="./assets/icons/foundry-agent-service.svg" width="20" alt="Foundry Agent Service"/> **Walkthrough** | S1 hosted agents, S2 identity, S3 tools/MCP, S4 scale/posture, S5 observability | `python scripts/demo_walkthrough.py ...` | `--dry-run` only | ![live-tested](./assets/badges/live-tested.svg) for live mode |
+| <img src="./assets/icons/foundry-agent-service.svg" width="20" alt="Foundry Agent Service"/> **Walkthrough** | Current script executes S1 only; S2-S5 require separate gateway/query/manual checks | `python scripts/demo_walkthrough.py ...` | `--dry-run` only (`PLAN`) | ![live-tested](./assets/badges/live-tested.svg) historical 2026-10-02 report only; not a current all-green script result |
 | <img src="./assets/icons/log-analytics.svg" width="20" alt="Log Analytics"/> **Audit queries** | KQL 01 (who called which tool), 04 (end-to-end trace), 11 (AI Gateway tier telemetry in `AppRequests`) | `python scripts/run_audit_queries.py ...` | No | ![live-tested](./assets/badges/live-tested.svg) all 11 saved queries ran; see [doc 09](./09-monitoring-and-audit.md#live-evidence) |
 | <img src="./assets/icons/foundry.svg" width="20" alt="Foundry"/> **Evaluations** | Agent evaluators over a dataset | Foundry portal or SDK | No | ![static-only](./assets/badges/static-only.svg) not run by this repo |
 | <img src="./assets/icons/content-safety.svg" width="20" alt="Content Safety"/> **Red teaming** | AI Red Teaming Agent scan | Foundry portal or SDK | No | ![static-only](./assets/badges/static-only.svg) not run by this repo |
@@ -125,7 +204,7 @@ The workbook and console have different time controls: the workbook defaults to 
 
 ## Agent × gateway test matrix
 
-Both agents (Microsoft Agent Framework and LangGraph, each on its official host) were exercised against both gateway lanes in the live run of 2026-10-02. ✅ = passed live; offline contract tests and `--dry-run` cover the same cells without Azure.
+Both agents (Microsoft Agent Framework and LangGraph, each on its official host) were exercised against both gateway lanes in the live run of 2026-10-02. ✅ preserves that **historical report**, not current browser acceptance. Offline contract tests require the official hosting packages; a skipped contract check does not establish its cell. Current `--dry-run` prints `PLAN`, never live evidence. The developer script's `--gateway` labels an expected route and does not reconfigure agents.
 
 [![Testing matrix: agents by gateways by layers](./assets/testing-matrix.png)](./assets/testing-matrix.png)
 
@@ -151,11 +230,11 @@ Run the offline steps first. Do not skip ahead to the gateway steps if an earlie
 | 3 | <img src="./assets/icons/workbooks.svg" width="24" alt="diagrams"/> | `python scripts/export_diagrams.py docs/assets --check` | - [ ] Exit 0: every `.drawio` has a PNG at least as new as the source. |
 | 4 | <img src="./assets/icons/api-management.svg" width="24" alt="API Management"/> | `python scripts/validate_gateway.py --ids demo-ids.local.json --target apimv2 --assert-401` | - [ ] Missing or wrong bearer returns 401. - [ ] Valid bearer for `api://<GATEWAY_APP_CLIENT_ID>` reaches the model and both MCP servers. |
 | 5 | <img src="./assets/icons/ai-gateway.svg" width="24" alt="AI Gateway"/> | `python scripts/validate_gateway.py --ids demo-ids.local.json --target aigateway --assert-401` | - [ ] Missing or wrong `api-key` returns 401. - [ ] Runtime key from Key Vault (or `AIGW_RUNTIME_KEY` locally) succeeds. - [ ] The request `model` equals the model alias name (`chat`). |
-| 6 | <img src="./assets/icons/foundry-agent-service.svg" width="24" alt="agent"/> | `python scripts/demo_walkthrough.py --ids demo-ids.local.json --agent both --gateway apimv2 --dry-run`, then repeat with `--gateway aigateway`. | - [ ] Steps S1 to S5 all print PASS for both agents. |
-| 7 | <img src="./assets/icons/log-analytics.svg" width="24" alt="Log Analytics"/> | `python scripts/run_audit_queries.py --ids demo-ids.local.json --query 01`, then `--query 11` (add `--trace-id <id>` with `--query 04`). | - [ ] Query 01 returns tool calls with principals. - [ ] Query 11 returns `AppRequests` rows for the AI Gateway lane (may be empty until telemetry lands). |
+| 6 | <img src="./assets/icons/foundry-agent-service.svg" width="24" alt="agent"/> | `python scripts/demo_walkthrough.py --ids demo-ids.local.json --agent both --gateway apimv2 --dry-run`, then repeat with `--gateway aigateway`. | - [ ] Steps print **PLAN**, never PASS. The gateway flag labels the expected route; no agent or gateway operation was executed. |
+| 7 | <img src="./assets/icons/log-analytics.svg" width="24" alt="Log Analytics"/> | `python scripts/run_audit_queries.py --ids demo-ids.local.json --query 01`, then `--query 11` (add `--trace-id <id>` with `--query 04`). | - [ ] Inspect actual caller/tool/trace rows and token sources; empty sources and missing identities/joins remain unverified, not passes. |
 
 > [!TIP]
-> To prove the throttling story (S4) add `--probe-429` to `validate_gateway.py`. It fires concurrent requests (default up to 25 attempts, `--max-429-attempts`) until the gateway returns 429, then confirms the audit trail still carries the trace id. On the AI Gateway tier, 183 of 240 probe requests were throttled in the live run.
+> S4 is optional and needs explicit authorization because it consumes model capacity. A bounded `validate_gateway.py --probe-429` probe can collect response evidence; inspect its configured attempt bound and actual logs. No observed 429 is not a pass, and a 429 alone does not prove a token-limit source or trace propagation. The 183-of-240 tier throttle result belongs to the historical 2026-10-02 run, not the current review.
 
 ### Gateway validation matrix
 
@@ -171,12 +250,12 @@ Both lanes return 401 for a bad credential, but for different reasons: APIM v2 v
 > [!TIP]
 > Run this before you tag a change or demo a build. Every item maps to a row in the matrix above.
 
-- [ ] `pytest` is green (offline suite).
+- [ ] Report local test failures and skipped checks explicitly; missing official-host dependencies do not establish contract coverage.
 - [ ] `python scripts/export_diagrams.py docs/assets --check` exits 0.
 - [ ] `validate_gateway.py --target apimv2 --assert-401` passes (when APIM lane deployed).
 - [ ] `validate_gateway.py --target aigateway --assert-401` passes (when AI Gateway tier lane deployed).
-- [ ] Walkthrough `--dry-run` passes for `maf` and `langgraph` on every deployed lane.
-- [ ] Audit query 01 shows `human_principal` and `agent_principal` for APIM v2 calls, and `caller = aigw-runtime-key:agents` with `agent_principal` null for AI Gateway tier calls.
+- [ ] Walkthrough `--dry-run` prints `PLAN` for both framework/expected-route labels, not live acceptance. Unimplemented S2-S5 are `NOT_RUN`; an incomplete live run exits 2.
+- [ ] Audit rows identify the actual APIM caller; a human requires real delegation and direct console checks identify its MI. Tier rows show the runtime-key label without an agent principal. Missing rows/joins remain unresolved.
 - [ ] Both agents' `postdeploy` summaries show the instance identity `granted` or `exists` (when `AIGW_KEY_DELIVERY=keyvault` and the tier is deployed).
 - [ ] No secret, key or token appears in any log line (the audit test enforces redaction of `authorization`, `api-key` and subscription keys).
 - [ ] Docs updated for any new env var, output or `demo-ids` key.
@@ -290,4 +369,4 @@ A disposable deployment of v1.2.0 (environment `fhagl1002`) was provisioned and 
 
 Next: [05 - Troubleshooting](./05-troubleshooting.md) →
 
-*Last updated: 2026-10-15*
+*Last updated: 2026-10-20*

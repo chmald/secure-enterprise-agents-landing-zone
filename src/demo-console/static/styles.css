@@ -15,9 +15,12 @@ input, select, textarea { display: block; width: 100%; margin-top: 8px; border: 
 textarea, pre { font-family: Consolas, monospace; }
 .check { display: flex; align-items: start; gap: 10px; line-height: 1.5; font-weight: 400; }.check input { width: auto; margin-top: 5px; }
 button { cursor: pointer; background: #0067b8; color: white; border: 0; border-radius: 6px; padding: 12px 18px; margin: 6px 8px 6px 0; font: inherit; font-weight: 600; }
-button:hover { background: #004e8c; } button:disabled { opacity: .55; cursor: wait; } button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid #e2a100; outline-offset: 3px; }
+button:hover { background: #004e8c; } button:disabled { opacity: .55; cursor: not-allowed; } button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid #e2a100; outline-offset: 3px; }
 nav { display: flex; flex-wrap: wrap; margin: 0 0 16px; } nav button { background: #dfeaf6; color: #163963; }nav button[aria-current="step"] { background: #073b73; color: white; }
 pre { padding: 18px; background: #10243e; color: #e8f2ff; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 560px; overflow: auto; font-size: .85rem; line-height: 1.5; }
 .status { display: inline-block; background: #e5eaf1; padding: 4px 10px; border-radius: 6px; font-size: .85rem; vertical-align: middle; }.status[data-status="passed"] { background: #d7f2df; color: #0b572a; }.status[data-status="failed"] { background: #ffe0de; color: #a01a10; }
 summary { cursor: pointer; margin: 16px 0; }li { padding: 6px 0; }footer { text-align: center; padding: 24px; color: #526780; font-size: .85rem; }[hidden] { display: none !important; }
+figure { margin: 20px 0; }.diagram { display: block; max-width: 100%; height: auto; border: 1px solid #d6e1ef; }figcaption { color: #526780; font-size: .85rem; line-height: 1.6; }
+.identity-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 16px; }.identity-grid article { border: 1px solid #d6e1ef; border-radius: 8px; padding: 16px; }.identity-grid h3 { margin-top: 0; }
+#identity-fields { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(0, 3fr); gap: 10px 20px; }#identity-fields dt { font-weight: 600; }#identity-fields dd { margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 600px) { header { padding: 20px; } main { padding: 0 12px; }.panel { padding: 18px; }button { width: 100%; }nav button { width: auto; flex: 1; font-size: .8rem; } }

@@ -3,6 +3,7 @@
 
 Assert-AzContextMatches -TenantId (Get-EnvValue -Name "AZURE_TENANT_ID") -SubscriptionId (Get-EnvValue -Name "AZURE_SUBSCRIPTION_ID")
 Set-DemoConsoleRedirectUri
+Set-DemoOboRedirectUri
 
 $root = Get-DemoRoot
 $idsPath = Join-Path $root "demo-ids.local.json"

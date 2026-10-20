@@ -39,7 +39,7 @@
     {
       "type": 1,
       "content": {
-        "json": "## Overview - token usage\n**Selected range: {TimeRange:label} ({TimeRange:start} to {TimeRange:end}); bucket: {TimeRange:grain}.** The left chart compares gateway lanes; the right chart shows hosted-agent **chat** spans separately. Input and output are distinct series. They describe overlapping work, not additional consumption. Empty buckets within an observed series are zero-filled across the selected window; a window with no token observations shows the no-data message, not fabricated series. The trace input below does not filter these charts."
+        "json": "## Overview - token usage\n**Selected range: {TimeRange:label} ({TimeRange:start} to {TimeRange:end}); bucket: {TimeRange:grain}.** The left chart compares gateway lanes; the right chart shows hosted-agent **chat** spans separately. **AI Gateway - Foundry-observed** uses real backend token counters matched to the gateway's managed identity, not the native tier request-log counters (which can incorrectly report zero). Missing native token telemetry remains unavailable; this does not establish native metric export or token-limit enforcement. Input and output are distinct series. They describe overlapping work, not additional consumption. Empty buckets within an observed series are zero-filled across the selected window; a window with no token observations shows the no-data message, not fabricated series. The trace input below does not filter these charts."
       },
       "name": "overview-header"
     },
@@ -56,7 +56,7 @@
           "showLegend": true,
           "showMetrics": true
         },
-        "noDataMessage": "No gateway LLM token telemetry in this time range. Generate a confirmed model request and allow for ingestion delay.",
+        "noDataMessage": "No gateway LLM token observations in this time range. For AI Gateway, verify the bound managed-identity principal ID and Foundry RequestResponse diagnostics; make a model request and allow for ingestion delay.",
         "size": 0,
         "title": "Gateway LLM tokens - APIM vs AI Gateway tier",
         "queryType": 0,
@@ -92,7 +92,7 @@
     {
       "type": 1,
       "content": {
-        "json": "## Token usage details\nUse these tables to inspect the source, recorded identity/model, routes and request counts behind the overview. Agent names are not application IDs; a shared tier key does not identify a human or agent principal."
+        "json": "## Token usage details\nUse these tables to inspect the source, recorded identity/model, routes and request counts behind the overview. **Foundry-observed** tier tokens are attributed to the gateway managed identity, not to a human/agent behind its shared runtime key. Query 11 retains separate **llm-request** rows with null token counts to expose the native-export gap; do not add those request observations to backend observations. Agent names are not application IDs. Missing identity binding or backend diagnostics means unavailable attribution, not zero usage."
       },
       "name": "token-details-header"
     },

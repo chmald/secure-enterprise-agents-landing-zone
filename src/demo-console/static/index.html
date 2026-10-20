@@ -10,11 +10,31 @@
 <body>
 <header><div><span class="eyebrow">SECURE ENTERPRISE AGENTS LANDING ZONE</span><h1>Demo console</h1><p id="profile">Loading deployment configuration...</p></div><a href="/.auth/logout">Sign out</a></header>
 <main>
-  <aside class="notice"><strong>Testing and demonstration only.</strong> Use synthetic data. Calls use the console's managed identity or the preview gateway's runtime key, not your delegated identity. Hosted agents retain their own runtime identity. No client-side credentials.</aside>
+  <aside class="notice"><strong>Testing and demonstration only.</strong> Use synthetic business data. Default calls use console managed identity or the preview runtime key; S2 has a separate, explicit user-OBO flow. Hosted agents retain their own runtime identity. Access tokens and application secrets stay server-side.</aside>
+  <details class="panel" id="session-guide">
+    <summary>Session agenda and presenter guide</summary>
+    <p>The eight discussion items below use S1-S5 for live evidence. This sample does not establish a customer's current architecture, approve a pilot, or assign owners. Keep customer-specific notes outside this console.</p>
+    <ol>
+      <li><strong>Objectives and success criteria.</strong> Agree the representative workflow, identify each identity boundary, exercise a governed read, and inspect its audit evidence. A completed response or a returned query row is not an end-to-end pass.</li>
+      <li><strong>Current-state architecture and requirements.</strong> Confirm the caller, existing runtime, APIs/systems, data, authorization, network and audit requirements. The configured domain is synthetic, not a customer's current state. <span id="scenario">The domain prompt is loading.</span></li>
+      <li><strong>Foundry Hosted Agents and architectural fit.</strong> Discuss managed hosting, the Responses contract and runtime/network requirements. Select either framework and use a domain prompt; the direct gateway selector does not change deployed agent routing. <button type="button" data-agenda-step="S1">Show S1 / Agents</button></li>
+      <li><strong>Agent identity, user identity and authorization.</strong> Separate deployer sign-in, console managed identity, hosted-agent instance identity and explicit console-to-APIM user OBO. OBO is user delegation, not per-record business authorization or hosted-agent delegation. <button type="button" data-agenda-step="S2">Show S2 / Identity</button></li>
+      <li><strong>APIM, MCP and downstream APIs.</strong> Discover live schemas, read the sample catalog and records, and compare native MCP with REST-as-MCP. REST and the explicit tool-denial probe are APIM-only. Writes require separate confirmation and disposable data. <button type="button" data-agenda-step="S3">Show S3 / Tools</button></li>
+      <li><strong>Traceability, monitoring and audit.</strong> Inspect query 01 for tool/identity evidence, 04 for a selected trace, and 02/11 for token sources. AI Gateway tokens are Foundry-observed, not proof of native export or token-limit enforcement. Record missing joins as gaps. <button type="button" data-agenda-step="S5">Show S5 / Audit</button></li>
+      <li><strong>Reference architecture and candidate pilot.</strong> Use the reference below to discuss one read-only-first workflow, one approved downstream interface, prerequisites, safeguards and measurable acceptance. Customer fit, pilot approval and production hardening remain to agree.
+        <figure>
+          <a href="/reference/architecture.png" target="_blank" rel="noopener noreferrer"><img id="architecture" class="diagram" src="/reference/architecture.png" loading="lazy" alt="Generic secure enterprise agents reference architecture; open full size"></a>
+          <figcaption id="reference-status">Generic reference only. Open the image full size to inspect the identity, gateway, backend and monitoring boundaries.</figcaption>
+        </figure>
+      </li>
+      <li><strong>Open questions, decisions, owners and next steps.</strong> Close with confirmed decisions, unresolved questions, a named owner and next review date for each item. Unconfirmed owners and dates stay to agree; this console does not save a decision or action register.</li>
+    </ol>
+  </details>
   <section class="panel selectors" aria-label="Deployment selection">
-    <label>Direct gateway<select id="gateway"><option value="apimv2">APIM Standard v2</option><option value="aigateway">AI Gateway tier (preview)</option></select></label>
+    <label>Direct gateway<select id="gateway"><option value="apimv2">APIM v2 (Entra)</option><option value="aigateway">AI Gateway tier (preview)</option></select></label>
     <label>Hosted agent<select id="agent"><option value="maf">Microsoft Agent Framework</option><option value="langgraph">LangGraph</option></select></label>
     <p id="agent-route"></p>
+    <p id="connection-status">Loading configuration. Configured resources are not a health or authorization check.</p>
   </section>
   <nav aria-label="Walkthrough"><button data-step="S1">S1 Agents</button><button data-step="S2">S2 Identity</button><button data-step="S3">S3 Tools</button><button data-step="S4">S4 Limits</button><button data-step="S5">S5 Audit</button></nav>
   <section class="panel" id="S1">
@@ -25,21 +45,32 @@
     <button data-action="agent">Invoke hosted agent</button>
   </section>
   <section class="panel" id="S2" hidden>
-    <h2>S2 / Authentication paths</h2><p>No credential should return exactly 401. The authenticated direct-model path demonstrates console identity (APIM) versus possession of a gateway runtime key (preview tier). Inspect S5 to verify the actual principal.</p>
-    <button data-action="unauthenticated">Check no-credential denial</button><button data-action="model">Call model with console credentials</button>
-    <p>Human on-behalf-of and hosted-agent instance identity are different paths. This console does not implement OBO.</p>
+    <h2>S2 / Who is calling?</h2>
+    <p>Signing into this console does not automatically delegate your identity. Compare the paths explicitly, then inspect the correlated audit rows. Identity probes discover catalog tools only: no model cost or business-data writes.</p>
+    <div class="identity-grid">
+      <article><h3>1 / Anonymous</h3><p>No credential. Expected result is exactly HTTP 401, not an authenticated caller.</p><button data-action="unauthenticated">Check no-credential denial</button></article>
+      <article><h3>2 / Console application</h3><p>APIM receives the console managed identity. A human click does not make this a delegated call.</p><button id="managed-identity-call" data-identity="managed" data-apim-only>Call as console identity</button><button data-action="model">Optional direct model call</button></article>
+      <article><h3>3 / Hosted agent</h3><p>The selected framework uses its distinct agent-instance identity. Run S1, then use its trace at S5 to verify the caller. This is not user OBO.</p><button data-agenda-step="S1">Open hosted-agent path</button></article>
+      <article><h3>4 / User through console (OBO)</h3><p>Explicit Entra sign-in obtains a user access token for the console API. The console exchanges it for an APIM token and performs a read-only call. This is not hosted-agent delegation.</p><p id="obo-availability">Loading OBO configuration...</p><button id="obo-call" data-identity="obo" data-apim-only>Sign in and call as user</button><button id="cancel-obo" hidden>Cancel pending sign-in</button></article>
+    </div>
+    <h3>Acquired identity metadata</h3>
+    <p id="identity-summary">No identity probe has run. User name/username appear only if reported by the token; user object ID is the stable identifier.</p>
+    <dl id="identity-fields"></dl>
+    <button id="identity-audit" data-action="identity-audit" data-apim-only>Read this identity call's audit</button>
+    <pre id="identity-audit-result">No audit evidence requested. Ingestion may lag; token metadata is not an audit pass.</pre>
   </section>
   <section class="panel" id="S3" hidden>
     <h2>S3 / Governed tools and REST</h2>
-    <div class="selectors"><label>MCP server<select id="server"><option value="catalog">Catalog / native MCP</option><option value="records">Records / REST-as-MCP</option></select></label><button data-action="mcp-list">Connect and discover tools</button></div>
-    <label>Live tool<select id="tool"><option value="">Discover tools first</option></select></label>
+    <p id="tool-path">Route details load with configuration.</p>
+    <div class="selectors"><label>MCP server<select id="server"><option value="catalog">Catalog / native MCP</option><option value="records">Records / MCP adapter</option></select></label><button data-action="mcp-list">Connect and discover tools</button></div>
+    <label>Live tool (only demo-enabled tools are selectable)<select id="tool"><option value="">Discover tools first</option></select></label>
     <label>Arguments (JSON; populated from the live input schema)<textarea id="arguments" rows="8">{}</textarea></label>
     <details><summary>Live tool schema</summary><pre id="schema">No tools discovered.</pre></details>
     <label class="check"><input id="write-confirm" type="checkbox"> I authorize this record creation/update using synthetic demo data.</label>
-    <button data-action="mcp-call">Call selected MCP tool</button><button data-action="denied-tool">Probe denied tool (APIM only)</button>
+    <button data-action="mcp-call">Call selected MCP tool</button><button data-action="denied-tool" data-apim-only>Probe denied tool (APIM only)</button>
     <h3>REST route (APIM only)</h3><p>Uses the same records backend through the APIM REST facade. Create/update use the JSON arguments above. The demo backend keeps records in memory; restarting it resets changes.</p>
     <label>Record ID (get/update)<input id="record-id" maxlength="100" placeholder="Copy an ID from list records"></label>
-    <button data-action="rest-list">List records</button><button data-action="rest-get">Get record</button><button data-action="rest-create">Create record</button><button data-action="rest-update">Update record</button>
+    <button data-action="rest-list" data-apim-only>List records</button><button data-action="rest-get" data-apim-only>Get record</button><button data-action="rest-create" data-apim-only>Create record</button><button data-action="rest-update" data-apim-only>Update record</button>
   </section>
   <section class="panel" id="S4" hidden>
     <h2>S4 / Bounded throttle probe</h2><p>At most 120 requests over a 90-second dispatch window, concurrency at most 8, with a small output budget. An observed 429 does not identify the policy that caused it; inspect gateway logs. No 429 within budget is not a pass. Only one probe runs at a time per replica.</p>
@@ -50,8 +81,10 @@
   </section>
   <section class="panel" id="S5" hidden>
     <h2>S5 / Audit and trace evidence</h2><p>Run a saved query over the last hour, capped at 200 rows per table. Ingestion can lag. Returned rows need interpretation: neither row presence nor the outgoing trace ID alone proves an end-to-end audit pass.</p>
-    <label>Saved KQL query<select id="query"><option>01</option><option>02</option><option>03</option><option>04</option><option>05</option><option>06</option><option>07</option><option>08</option><option>09</option><option>10</option><option>11</option></select></label>
-    <label>Trace ID (query 04; copied from latest call)<input id="trace-id" maxlength="32" pattern="[0-9a-f]{32}" placeholder="32 lowercase hexadecimal characters"></label>
+    <p>Use 01 and 04 for this sample's APIM HTTP-proxy tool audit and gateway joins. Query 05 requires native MCP resource logs, which HTTP proxies may not emit. A preview gateway trace may show gateway/client spans without a verified backend join.</p>
+    <p><a id="workbook-link" target="_blank" rel="noopener noreferrer" hidden>Open the deployed audit workbook</a><span id="workbook-state">Loading workbook configuration...</span> The workbook has a separate selectable time range; this console uses the last hour. Tier token series are labeled <strong>AI Gateway - Foundry-observed</strong>.</p>
+    <label>Saved KQL query<select id="query"><option value="">Loading bundled queries...</option></select></label>
+    <label>Trace ID (query 04; copied from latest call; blank shows all traces)<input id="trace-id" maxlength="32" pattern="[0-9a-f]{32}" placeholder="32 lowercase hexadecimal characters"></label>
     <button data-action="audit">Run saved query</button>
   </section>
   <section class="panel results" aria-live="polite" aria-busy="false">

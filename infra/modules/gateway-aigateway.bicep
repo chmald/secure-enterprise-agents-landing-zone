@@ -300,6 +300,7 @@ resource runtimeKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
 
 output gatewayName string = aiGateway.name
 output gatewayResourceId string = aiGateway.id
+output principalId string = aiGateway.identity.principalId
 output gatewayUrl string = aiGateway.properties.gatewayUrl
 output location string = location
 output catalogMcpUrl string = '${aiGateway.properties.gatewayUrl}/default/toolservers/${catalogToolServer.name}/mcp'

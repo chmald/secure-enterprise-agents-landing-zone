@@ -3,9 +3,10 @@ param location string
 param tags object = {}
 param workbookDisplayName string
 param logAnalyticsWorkspaceId string
+param aigwPrincipalId string = ''
 
 // Scope source rows before aggregation, joins, hourly bins and row limits.
-func scopeQueryToTimeRange(query string, tables string[]) string => '${join(map(filter(tables, tableName => contains(query, tableName)), tableName => 'let ${tableName} = ${tableName} | where TimeGenerated {TimeRange:query};'), '\n')}\n${query}'
+func scopeQueryToTimeRange(query string, tables string[], principalId string) string => '${join(map(filter(tables, tableName => contains(query, tableName)), tableName => 'let ${tableName} = ${tableName} | where TimeGenerated {TimeRange:query};'), '\n')}\n${replace(query, 'let aigwPrincipalId = "";', 'let aigwPrincipalId = "${principalId}";')}'
 
 // Segmented charts use one numeric measure; make-series preserves the selected window.
 func tokenTrend(query string) string => concat(
@@ -52,7 +53,7 @@ var savedQueries = {
   'content-safety': loadTextContent('../monitoring/queries/09-content-safety-blocks.kql')
   'foundry-audit': loadTextContent('../monitoring/queries/10-foundry-audit.kql')
   'standard-v2-vs-aigw-tier': loadTextContent('../monitoring/queries/11-ai-gateway-tier-telemetry.kql')
-  'gateway-token-trend': tokenTrend('${loadTextContent('../monitoring/queries/11-ai-gateway-tier-telemetry.kql')}\n| where Gateway in ("apim-standard-v2", "aigateway-tier") and Surface == "llm"\n| project TimeGenerated, Group=Gateway, InputTokens, OutputTokens')
+  'gateway-token-trend': tokenTrend('${loadTextContent('../monitoring/queries/11-ai-gateway-tier-telemetry.kql')}\n| where Gateway in ("apim-standard-v2", "aigateway-tier") and Surface == "llm"\n| project TimeGenerated, Group=iff(Gateway == "aigateway-tier", "AI Gateway - Foundry-observed", "APIM v2"), InputTokens, OutputTokens')
   'agent-token-trend': tokenTrend('${loadTextContent('../monitoring/queries/11-ai-gateway-tier-telemetry.kql')}\n| where Gateway startswith "hosted-agent:" and Surface == "chat"\n| project TimeGenerated, Group=replace_string(Gateway, "hosted-agent:", ""), InputTokens, OutputTokens')
 }
 var items = [for item in layout.items: union(item, {
@@ -64,7 +65,8 @@ var items = [for item in layout.items: union(item, {
       contains(savedQueries, item.name)
         ? (endsWith(item.name, '-token-trend') ? savedQueries[item.name] : '${savedQueries[item.name]}\n| take 200')
         : item.content.query,
-      sourceTables
+      sourceTables,
+      aigwPrincipalId
     )
   } : {})
 })]

@@ -35,6 +35,10 @@ param demoConsoleClientId string
 param demoConsoleAllowedUserId string
 @secure()
 param demoConsoleClientSecret string
+param enableDemoObo bool = false
+param demoOboClientId string = ''
+@secure()
+param demoOboClientSecret string = ''
 param agentDefaultGateway string = 'apimv2'
 @allowed([
   'keyvault'
@@ -374,6 +378,7 @@ module aigwPe 'modules/private-endpoint.bicep' = if (networkIsolation && deployA
 var activeGatewayName = deployApimV2Gateway ? gatewayApim.outputs.apimName : gatewayAi.outputs.gatewayName
 var activeGatewayUrl = deployApimV2Gateway ? gatewayApim.outputs.gatewayUrl : gatewayAi.outputs.gatewayUrl
 var aigwGatewayUrl = deployAiGatewayTier ? gatewayAi.outputs.gatewayUrl : ''
+var aigwPrincipalId = deployAiGatewayTier ? gatewayAi.outputs.principalId : ''
 var aigwMcpCatalogUrl = empty(aigwGatewayUrl) ? '' : '${aigwGatewayUrl}/default/toolservers/catalog-mcp/mcp'
 var aigwMcpRecordsUrl = empty(aigwGatewayUrl) ? '' : '${aigwGatewayUrl}/default/toolservers/records/mcp'
 var mcpCatalogUrl = deployApimV2Gateway ? '${activeGatewayUrl}/catalog-mcp/mcp' : aigwMcpCatalogUrl
@@ -393,6 +398,10 @@ module demoConsole 'modules/demo-console.bicep' = {
     clientId: demoConsoleClientId
     allowedUserId: demoConsoleAllowedUserId
     clientSecret: demoConsoleClientSecret
+    enableDemoObo: enableDemoObo
+    oboClientId: demoOboClientId
+    oboClientSecret: demoOboClientSecret
+    gatewayAppClientId: gatewayAppClientId
     domainProfile: domainProfile
     agentDefaultGateway: agentDefaultGateway
     foundryAccountName: foundry.outputs.aiServicesName
@@ -400,10 +409,12 @@ module demoConsole 'modules/demo-console.bicep' = {
     foundryProjectEndpoint: foundry.outputs.projectEndpoint
     apimGatewayUrl: deployApimV2Gateway ? gatewayApim.outputs.gatewayUrl : ''
     aigwGatewayUrl: aigwGatewayUrl
+    aigwPrincipalId: aigwPrincipalId
     aiGatewayMode: aiGatewayMode
     modelDeploymentName: modelDeploymentName
     workspaceName: monitoring.outputs.logAnalyticsWorkspaceName
     workspaceCustomerId: monitoring.outputs.logAnalyticsCustomerId
+    workbookId: workbook.outputs.workbookId
     keyVaultName: keyvault.outputs.keyVaultName
     keyVaultUri: keyvault.outputs.keyVaultUri
     runtimeKeySecretName: aigwRuntimeKeySecretName
@@ -463,6 +474,7 @@ module workbook 'modules/workbook.bicep' = {
     tags: tags
     workbookDisplayName: 'Hosted agents gateway audit - ${environmentName}'
     logAnalyticsWorkspaceId: monitoring.outputs.logAnalyticsWorkspaceId
+    aigwPrincipalId: aigwPrincipalId
   }
 }
 
@@ -472,6 +484,7 @@ module querypack 'modules/querypack.bicep' = {
     location: location
     tags: tags
     queryPackName: take('queries-${normalized}-${shortSuffix}', 63)
+    aigwPrincipalId: aigwPrincipalId
   }
 }
 
@@ -514,6 +527,7 @@ output APIM_GATEWAY_URL string = activeGatewayUrl
 output AI_GATEWAY_MODE string = aiGatewayMode
 output AIGW_GATEWAY_NAME string = deployAiGatewayTier ? gatewayAi.outputs.gatewayName : ''
 output AIGW_GATEWAY_URL string = aigwGatewayUrl
+output AIGW_PRINCIPAL_ID string = aigwPrincipalId
 output AIGW_LOCATION string = deployAiGatewayTier ? aiGatewayTierLocation : ''
 output AIGW_MCP_CATALOG_URL string = aigwMcpCatalogUrl
 output AIGW_MCP_RECORDS_URL string = aigwMcpRecordsUrl

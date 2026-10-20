@@ -37,6 +37,10 @@ param demoConsoleClientId string
 param demoConsoleAllowedUserId string
 @secure()
 param demoConsoleClientSecret string
+param enableDemoObo bool = false
+param demoOboClientId string = ''
+@secure()
+param demoOboClientSecret string = ''
 param agentDefaultGateway string = 'apimv2'
 param aigwKeyDelivery string = 'keyvault'
 param tokenLimitTpmPerAgent int = 20000
@@ -101,6 +105,9 @@ module main 'main.bicep' = {
     demoConsoleClientId: demoConsoleClientId
     demoConsoleAllowedUserId: demoConsoleAllowedUserId
     demoConsoleClientSecret: demoConsoleClientSecret
+    enableDemoObo: enableDemoObo
+    demoOboClientId: demoOboClientId
+    demoOboClientSecret: demoOboClientSecret
     agentDefaultGateway: agentDefaultGateway
     aigwKeyDelivery: aigwKeyDelivery
     tokenLimitTpmPerAgent: tokenLimitTpmPerAgent
@@ -147,6 +154,7 @@ output APIM_GATEWAY_URL string = main.outputs.APIM_GATEWAY_URL
 output AI_GATEWAY_MODE string = main.outputs.AI_GATEWAY_MODE
 output AIGW_GATEWAY_NAME string = main.outputs.AIGW_GATEWAY_NAME
 output AIGW_GATEWAY_URL string = main.outputs.AIGW_GATEWAY_URL
+output AIGW_PRINCIPAL_ID string = main.outputs.AIGW_PRINCIPAL_ID
 output AIGW_LOCATION string = main.outputs.AIGW_LOCATION
 output AIGW_MCP_CATALOG_URL string = main.outputs.AIGW_MCP_CATALOG_URL
 output AIGW_MCP_RECORDS_URL string = main.outputs.AIGW_MCP_RECORDS_URL

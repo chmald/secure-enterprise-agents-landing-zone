@@ -1,6 +1,6 @@
 
 from __future__ import annotations
-import argparse, os
+import argparse, os, uuid
 import json
 import re
 import subprocess
@@ -13,6 +13,12 @@ from azure.monitor.query import LogsQueryClient
 ROOT=Path(__file__).resolve().parents[1]; QUERY_DIR=ROOT/"infra"/"monitoring"/"queries"
 def load_ids(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+def bind_gateway_identity(query: str, principal_id: str) -> str:
+    try:
+        principal_id = str(uuid.UUID(principal_id))
+    except ValueError:
+        raise SystemExit("aigwPrincipalId / AIGW_PRINCIPAL_ID must be a managed-identity principal GUID") from None
+    return query.replace('let aigwPrincipalId = "";', f'let aigwPrincipalId = "{principal_id}";')
 class AzCliCredential:
     def get_token(self, *scopes, **kwargs):
         scope=scopes[0] if scopes else "https://api.loganalytics.io/.default"
@@ -35,6 +41,12 @@ def main():
     client=LogsQueryClient(credential)
     for path in files:
         query=path.read_text();
+        if path.name.startswith(("02-", "11-")):
+            principal_id = ids.get("aigwPrincipalId") or os.environ.get("AIGW_PRINCIPAL_ID")
+            if principal_id:
+                query = bind_gateway_identity(query, principal_id)
+            else:
+                print("WARNING: AI Gateway token attribution unavailable; populate aigwPrincipalId / AIGW_PRINCIPAL_ID.", file=sys.stderr)
         if path.name.startswith("04-") and a.trace_id:
             if not re.fullmatch(r"[0-9A-Za-z-]+", a.trace_id): raise SystemExit("--trace-id must be alphanumeric/hyphen")
             query=query.replace('traceId:string = ""', f'traceId:string = "{a.trace_id}"')

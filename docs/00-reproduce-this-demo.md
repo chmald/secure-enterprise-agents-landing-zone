@@ -22,14 +22,14 @@
 Single-page orchestrator for standing up the **Foundry Hosted Agents + AI Gateway Landing Zone** from an empty Azure subscription. Use it for checkpoints before opening the deeper runbooks. It is written for the person who will actually run the build - typically a platform engineer or developer - and every part ends with a checkpoint you can tick off.
 
 > [!IMPORTANT]
-> **Browser path: deployed with limited live checks, not a completed browser acceptance matrix.** See the [2026-10-16 follow-up](./04-testing.md#live-follow-up-2026-10-16). One-time provisioning still uses the CLI; presenting S1-S5 does not. `azd up` includes `demo-console` (remote build, repository-root Docker context). For an existing environment run `azd provision`, then `azd deploy records-api demo-console` so the REST collection-routing fix ships too. Open `DEMO_CONSOLE_URL` as the deploying human. Earlier badges/evidence describe the script-driven deployment only.
+> **Browser path: deployed with limited live checks, not a completed browser acceptance matrix.** See the [2026-10-20 limited follow-up](./04-testing.md#limited-follow-up-2026-10-20). One-time provisioning still uses the CLI; presenting S1-S5 does not. `azd up` includes `demo-console` (remote build, repository-root Docker context). Existing environments need updated configuration and image; see [narrow GUI/workbook-link updates](./03-deployment.md#updating-only-the-console-guide-and-workbook-link). The earlier REST collection fix still needs `records-api` deployed when upgrading that older service. Open `DEMO_CONSOLE_URL` as the deploying human. Historical badges/evidence are not current acceptance.
 
 ### Browser reproduction checkpoints
 
 1. Complete Part A with a human Azure CLI login in the intended tenant/subscription. Before setup operations, `preprovision` verifies that context, resolves `AZURE_PRINCIPAL_ID` from the signed-in user, and ensures a separate single-tenant console Entra app and credential. App/credential creation permissions are required.
 2. Provision with the existing hooks ([03 - Console setup](./03-deployment.md#demo-console-provisioning-and-sign-in)). `DEMO_CONSOLE_CLIENT_ID`, `DEMO_CONSOLE_ALLOWED_USER_ID`, and `DEMO_CONSOLE_CLIENT_SECRET` must be populated by setup before deployment; blank defaults fail closed. Do not print or commit secret-bearing azd state.
 3. Check outputs `DEMO_CONSOLE_URL` and `DEMO_CONSOLE_APP_NAME`; sign in as the deployer. Easy Auth is tenant-only and deployer-allowlisted; the backend verifies the platform-injected principal ID and rejects conflicting owner/tenant claims when supplied. With `NETWORK_ISOLATION=true`, the console is in the internal ACA environment: use a VNet/VPN-connected browser and working private DNS.
-4. Follow [browser S1-S5](./11-demo-walkthrough.md#browser-console-s1-s5). Confirm **every** agent submission (tools can mutate), direct write and bounded throttle burst separately. Inspect raw details and statuses; no 429/empty logs means `not_run`, not success.
+4. Use [doc 11's eight-item session guide](./11-demo-walkthrough.md#eight-item-customer-session-agenda) for discovery, synthetic scenario, runtime/identity fit, evidence, candidate pilot and closeout; customer answers, owners and approvals are unknown / to agree. The GUI's collapsed presenter guide shows the maintained reference diagram around the existing [browser S1-S5](./11-demo-walkthrough.md#browser-console-s1-s5) workflows. Confirm **every** authorized agent submission (tools can mutate), direct write and bounded throttle burst separately. No 429/empty logs means `not_run`, not success.
 5. Keep agent routing separate from direct checks: the dropdown does not change deployed `HOSTED_DEFAULT_GATEWAY`. The displayed hosted gateway is a **provisioning snapshot**, not live discovery; after changing `AGENT_DEFAULT_GATEWAY`, run `azd provision` to sync console configuration as well as redeploying agents. OBO, optional ACA agent comparison, and network isolation verification remain manual/unavailable unless explicitly deployed/verified. The console never runs CLI commands or scripts inside the app.
 
 ## At a glance
@@ -187,24 +187,25 @@ python scripts/validate_gateway.py --ids demo-ids.local.json --target aigateway
 
 | Step | | Action | Validation |
 |---|---|---|---|
-| **E1** | <img src="./assets/icons/foundry-agent-service.svg" width="24" alt="Foundry Agent Service"> | Set `AGENT_DEFAULT_GATEWAY aigateway`; redeploy only the agents. | - [ ] `azd deploy agent-maf agent-langgraph` completes. |
-| **E2** | <img src="./assets/icons/workbooks.svg" width="24" alt="Workbooks"> | Dry-run the walkthrough against the AI Gateway tier. | - [ ] Every step resolves to the expected tool. |
+| **E1** | <img src="./assets/icons/foundry-agent-service.svg" width="24" alt="Foundry Agent Service"> | Intentionally change `AGENT_DEFAULT_GATEWAY aigateway`, provision to sync the console snapshot, then redeploy the agents. | - [ ] Deployment completes; actual routing still needs log verification. |
+| **E2** | <img src="./assets/icons/workbooks.svg" width="24" alt="Workbooks"> | Dry-run the walkthrough with the expected tier route label. | - [ ] It prints `PLAN`; no tools or live route are verified. |
 
 ```powershell
 azd env set AGENT_DEFAULT_GATEWAY aigateway
+azd provision
 azd deploy agent-maf agent-langgraph
 python scripts/demo_walkthrough.py --ids demo-ids.local.json --agent both --gateway aigateway --dry-run
 ```
 
 > [!NOTE]
-> The v1.2 live run passed S1-S5 for both agents on both gateways; see [04 - Testing](./04-testing.md#live-validation-2026-10-02) for timings and the defects found.
+> The historical 2026-10-02 v1.2 report recorded S1-S5 for both agents/gateways ([04](./04-testing.md#live-validation-2026-10-02)); it is not current browser acceptance. Current dry-run prints `PLAN`; unexecuted S2-S5 are `NOT_RUN`, and an incomplete live run exits 2. `--gateway` labels an expected route only.
 
 ### Part F - Audit proof and regression <img src="./assets/icons/log-analytics.svg" width="24" alt="">
 
 | Step | | Action | Validation |
 |---|---|---|---|
-| **F1** | <img src="./assets/icons/log-analytics.svg" width="24" alt="Log Analytics"> | Query 01 (who called which tool) and query 11 (AI Gateway tier telemetry). | - [ ] Query 01 shows tool rows; query 11 has rows after traffic. |
-| **F2** | <img src="./assets/icons/query-pack.svg" width="24" alt="Query pack"> | Check diagram freshness and run the test suite. | - [ ] `pytest` passes; `export_diagrams.py --check` is clean. |
+| **F1** | <img src="./assets/icons/log-analytics.svg" width="24" alt="Log Analytics"> | Inspect queries 01/04 for caller/tool/trace evidence and 02/11 for token sources. | - [ ] Actual rows support each claim; missing joins/empty sources remain unverified. Tier token totals are Foundry-observed, not native export. |
+| **F2** | <img src="./assets/icons/query-pack.svg" width="24" alt="Query pack"> | Check diagram freshness and run local tests. | - [ ] Report failures and skipped dependencies separately; `export_diagrams.py --check` is clean. |
 
 ```powershell
 python scripts/run_audit_queries.py --ids demo-ids.local.json --query 01
@@ -214,7 +215,7 @@ pytest
 ```
 
 > [!TIP]
-> On `apimv2`, query 01 rows carry `agent_principal` / `human_principal` derived from Entra tokens. On `aigateway`, the audit row honestly shows `gateway="aigateway"`, `caller="aigw-runtime-key:agents"`, `agent_principal=null`. That difference is the point of the comparison - see [01 - Architecture](./01-architecture.md#trust-boundaries).
+> On `apimv2`, gateway-derived fields describe the actual caller: direct console calls identify its MI; a human requires actual delegation, not browser sign-in. On `aigateway`, the audit row has `gateway="aigateway"`, `caller="aigw-runtime-key:agents"` and no agent principal. APIM validation/global tool allowlisting is not per-user record authorization; public backend trust and the absent APIM content-safety policy remain demo limits ([01](./01-architecture.md#trust-boundaries)).
 
 ## If you get stuck
 
@@ -227,4 +228,4 @@ Next: [01 - Architecture](./01-architecture.md) →
 
 ---
 
-*Last updated: 2026-10-15*
+*Last updated: 2026-10-20*

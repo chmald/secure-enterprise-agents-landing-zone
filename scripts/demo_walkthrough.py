@@ -68,16 +68,25 @@ def invoke_agent(agent: str, ids: dict[str, Any], prompt: str) -> tuple[bool, st
     token = ai_token()
     tp = traceparent()
     response = httpx.post(endpoint, headers={"Authorization": f"Bearer {token}", "traceparent": tp, "Content-Type": "application/json"}, json={"input": prompt, "stream": False}, timeout=90)
-    return 200 <= response.status_code < 300, f"{response.status_code}; trace_id={tp.split('-')[1]}"
+    detail = f"HTTP {response.status_code}; outgoing trace_id={tp.split('-')[1]} (verify propagation separately)"
+    try:
+        payload = response.json()
+    except ValueError:
+        return False, detail + "; response was not JSON"
+    completed = (
+        response.is_success and isinstance(payload, dict) and not payload.get("error")
+        and payload.get("status") == "completed" and isinstance(payload.get("output"), list)
+    )
+    return completed, detail + ("; completed Responses payload" if completed else "; response did not complete successfully")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ids", default=str(ROOT / "demo-ids.local.json"))
-    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--dry-run", action="store_true", help="Print PLAN rows only; never a live evidence pass.")
     parser.add_argument("--step", help="Run one walkthrough step such as S1, or 'smoke' for the readiness smoke step.")
     parser.add_argument("--agent", choices=["maf", "langgraph", "both"], default="maf")
-    parser.add_argument("--gateway", choices=["apimv2", "aigateway"], default="apimv2")
+    parser.add_argument("--gateway", choices=["apimv2", "aigateway"], default="apimv2", help="Expected route label only; does not switch deployed hosted agents.")
     args = parser.parse_args()
 
     ids = load_ids(Path(args.ids))
@@ -92,13 +101,21 @@ def main() -> int:
     rows: list[dict[str, str]] = []
     for agent in agents:
         for step in steps:
-            ok = True
-            detail = step["assertion"]
+            result = "PLAN" if args.dry_run else "NOT_RUN"
+            detail = "Proposed check, not executed: " + step["assertion"]
             if not args.dry_run and step["step"] == "S1":
                 ok, detail = invoke_agent(agent, ids, step["prompt"])
-            rows.append({"Agent": agent, "Gateway": args.gateway, "Step": step["step"], "Segment": step["segment"], "Expected tool": str(step.get("expectedTool") or "n/a"), "Result": "PASS" if ok else "FAIL", "Check": detail})
+                result = "PASS" if ok else "FAIL"
+            elif not args.dry_run:
+                detail = f"No live {step['step']} check is implemented in this script; use the browser workflow and inspect its evidence."
+            rows.append({"Agent": agent, "Expected gateway": args.gateway, "Step": step["step"], "Segment": step["segment"], "Expected tool": str(step.get("expectedTool") or "n/a"), "Result": result, "Check": detail})
     print_table(rows)
-    return 0 if all(row["Result"] == "PASS" for row in rows) else 1
+    print("The expected gateway is a label, not live routing discovery. Completed responses do not prove tool use, readiness or end-to-end traces.")
+    if args.dry_run:
+        return 0
+    if any(row["Result"] == "FAIL" for row in rows):
+        return 1
+    return 2 if any(row["Result"] == "NOT_RUN" for row in rows) else 0
 
 
 if __name__ == "__main__":

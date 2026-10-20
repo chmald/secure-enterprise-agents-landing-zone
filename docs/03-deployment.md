@@ -22,7 +22,10 @@
 Deployment runbook for the primary infrastructure-as-code path. v1.2 deploys **both** APIM Standard v2 and the AI Gateway tier preview side by side for comparison - both were live-validated on 2026-10-02 - while keeping APIM v2 as the safe runtime baseline. For a no-IaC build, see [03b - Manual deployment](./03b-manual-deployment.md).
 
 > [!IMPORTANT]
-> **Console deployment has limited live checks; full browser acceptance remains pending.** See the [2026-10-16 follow-up](./04-testing.md#live-follow-up-2026-10-16). Earlier badges, durations and evidence below concern the script-driven v1.2 deployment. One-time provisioning still needs local CLI tools; after deployment the browser walkthrough needs no local scripts.
+> **Console deployment has limited live checks; full browser acceptance remains pending.** See the [2026-10-20 limited follow-up](./04-testing.md#limited-follow-up-2026-10-20). Earlier badges, durations and evidence below concern the historical script-driven v1.2 deployment. The session-guide/image/link changes require the new console image and configuration; local tests are not proof of their Azure deployment. One-time provisioning still needs local CLI tools; the browser walkthrough needs no local scripts.
+
+> [!WARNING]
+> **Do not full-provision the current live environment for this update.** Live APIM is **Basic v2**, while azd requests **StandardV2**. The reference/default new build remains Standard/Premium v2, but an unreviewed `azd provision` would include SKU drift. Keep preview deferred and the SKU unchanged; use scoped app/policy/configuration updates plus separate service deployments below. The general provisioning/rotation/route-switch recipes later in this document apply only after an operator has reviewed and reconciled infrastructure drift.
 
 ## Demo console provisioning and sign-in
 
@@ -40,18 +43,59 @@ For a new environment, use the existing configured flow:
 azd up
 ```
 
-For an existing environment with its agents/tools already deployed, select that azd environment, verify Phase 0 again, then:
+For an existing environment with agents/tools already deployed, select that azd environment and verify Phase 0 again. Apply only approved runtime/auth/policy changes (see [OBO setup](#optional-console-to-apim-user-obo)); an image deploy does not update missing environment variables, secrets, platform auth or APIM policies.
+
+**Before restarting either backend, verify that the in-memory records still contain only the unchanged disposable seed state.** If any records were created/updated, stop and agree preservation/rollback before restarting `records-api`; a restart can discard those changes. The current azd CLI accepts at most **one service argument** per deploy:
 
 ```powershell
-azd provision
-azd deploy records-api demo-console
+azd deploy catalog-mcp
+azd deploy records-api
+azd deploy demo-console
 ```
 
-Redeploy **both** services for this upgrade: `records-api` now accepts collection GET/POST at `/records/` without redirecting, matching the APIM facade. Canonical `/records` routes remain unchanged. The console deliberately does not follow backend redirects or forward credentials to them.
+Redeploy the two audit backends and console separately for the OBO comparison. No agent deployment, route change, full provisioning or preview update is needed. `records-api` also accepts collection GET/POST at `/records/` without redirecting, matching the APIM facade. Canonical `/records` routes remain unchanged. The console deliberately does not follow backend redirects or forward credentials to them.
 
 The `demo-console` service builds remotely using **repository-root Docker context** and deploys `ca-demo-console` into the **existing ACA environment**; scale-to-zero, **maxReplicas=1**. The root `.dockerignore` allowlist excludes local azd state, populated IDs, credentials and virtual environments from the remote build context. It does not need a local Docker build. Outputs are `DEMO_CONSOLE_URL` and `DEMO_CONSOLE_APP_NAME`. Open the URL as the deploying human and follow [browser S1-S5](./11-demo-walkthrough.md#browser-console-s1-s5). With `NETWORK_ISOLATION=true`, the ACA environment is internal; the browser needs VNet/VPN connectivity and private DNS.
 
-The console's displayed hosted gateway is a **provisioning snapshot**, not live discovery. If you change `AGENT_DEFAULT_GATEWAY`, run `azd provision` to sync console configuration and redeploy agents. An agent-only `azd deploy` can leave the console snapshot stale; the direct gateway dropdown never changes actual agent routing.
+The console's displayed hosted gateway is a **provisioning snapshot**, not live discovery. An approved `AGENT_DEFAULT_GATEWAY` change must synchronize console configuration as well as redeploying agents; an agent-only `azd deploy` can leave that snapshot stale. Full provisioning normally wires it, but is not appropriate for the current drifted environment. The direct gateway dropdown never changes actual agent routing.
+
+### Optional console-to-APIM user OBO
+
+`ENABLE_DEMO_OBO` is **opt-in, default `false`**. It adds an explicit S2 sign-in/catalog-discovery comparison without replacing the primary single-tenant/deployer-only Easy Auth app. It is **not** hosted-agent delegation, model traffic, record writes or user/record-level business authorization.
+
+The server-side flow needs **three distinct app roles**; A is new, B and C already exist:
+
+| App | Configuration | Role / server-only credential |
+|---|---|---|
+| **A — auxiliary confidential web/sign-in client** | `DEMO_OBO_CLIENT_ID`, `DEMO_OBO_CLIENT_SECRET` | Obtains a user **access token for B**, scope `api://<B>/Console.Access`. The new secret is delivered by ACA secret reference **`obo-signin-secret`**, never to browser JavaScript. |
+| **B — existing console API / Easy Auth app** | `DEMO_CONSOLE_CLIENT_ID`, `DEMO_CONSOLE_CLIENT_SECRET` | Exposes `Console.Access` and uses its **own existing confidential credential** (ACA secret reference **`entra-client-secret`**) for MSAL `acquire_token_on_behalf_of` toward C. An ID token or self-audience assertion is not a substitute for A's user access token for B. |
+| **C — existing gateway API app** | `GATEWAY_APP_CLIENT_ID` | Exposes delegated `api://<C>/Gateway.Access`; APIM accepts C's exact client-ID GUID as well as its original `api://` URI and Cognitive Services audience. No C client secret is needed for this exchange. |
+
+After the tenant/subscription gate and a human operator login, select the intended environment and run:
+
+```powershell
+azd env select <ENV_NAME>
+azd env set ENABLE_DEMO_OBO true
+python scripts/configure_console_obo.py --environment <ENV_NAME> --apply
+```
+
+The helper only changes **operator-owned, single-tenant** apps/scopes. It merges unrelated permissions, persists exposed scopes **before** adding preauthorization references, adds narrow **A → B `Console.Access`** and **B → C `Gateway.Access`** preauthorizations, and configures optional `upn`/`email` access-token claims. It does **not** create tenant-wide Microsoft Graph consent grants. Missing permissions, grant failures and consent requirements remain explicit errors, not permission broadening or managed-identity fallback.
+
+The helper saves the generated A secret **only to the ignored local azd `.env`**, never command arguments or output. That local state is secret-bearing. Never paste it, use it in a recording or commit it. Do not pass a secret on the CLI to reproduce this setup.
+
+For a **new/reconciled environment**, optional pre/postprovision hooks run this setup when enabled; the first provisioning establishes the URL. Then set A's exact HTTPS web redirect with:
+
+```powershell
+python scripts/configure_console_obo.py --environment <ENV_NAME> --apply --redirect-only
+```
+
+The redirect is **`https://<CONSOLE_HOST>/api/identity/obo/callback`**, not Easy Auth B's `/.auth/login/aad/callback`. Entra returns the authorization code by **`form_post`** (`POST`), not in a callback URL query string. The code is redeemed server-side. Defensive access-log redaction is additional protection, not permission to capture callback bodies, codes, tokens or cookies.
+
+For the **current existing SKU-drifted environment**, do not use full provisioning to propagate these values. Apply the approved narrow APIM audience/identity-fragment update and the console runtime environment/ACA secret references separately, preserving all unrelated settings, primary Easy Auth and CSRF controls. Local `azd env set` alone does not configure a running app. Once the exact callback is registered and runtime values are in place, deploy `catalog-mcp`, `records-api` and `demo-console` one at a time as shown above, after the record-state precheck. Do not redeploy agents or alter preview/SKU.
+
+Only the exact OBO callback is excluded from **platform login**; it independently validates the Secure/HttpOnly/SameSite=None `__Host-` browser-binding cookie, MSAL state/nonce/PKCE, tenant and exact allowed deployer before downstream exchange/probe. Other console routes retain Easy Auth plus `X-Demo`/exact-Origin CSRF checks. Tokens stay server-side. State/results live only in one console replica's memory (10/5-minute TTLs); parent-page polling keeps the console active during sign-in. Restart/expiry/cancel/replay fails closed, never to MI.
+
+**Acceptance:** sign in explicitly from S2, inspect the catalog `initialize` / initialized notification / `tools/list` result, then select **“Read this identity call's audit”** for query 01 filtered by this probe's trace ID. Confirm `identity_type`, `human_oid`, optional `human_name` / `human_username`, `delegated_scopes` and the calling app. Acquired-token metadata is **not** audit proof. Real human sign-in/audit acceptance remains pending until recorded in [doc 04](./04-testing.md); configured apps/callbacks or passing local tests do not establish it. Treat real operator identity fields as privacy-relevant even though business data is synthetic.
 
 ### Console managed-identity permissions
 
@@ -62,13 +106,13 @@ The console's displayed hosted gateway is a **provisioning snapshot**, not live 
 | **Log Analytics Reader** | Log Analytics workspace | Executing fixed, bounded saved KQL queries 01-11. |
 | **Key Vault Secrets User** | Demo Key Vault | Reading the tier runtime key in default `keyvault` mode. |
 
-These grants belong to the **console backend managed identity**, not the signed-in browser user or the hosted agents' instance identities. The console does not exchange the human's token for OBO. `AIGW_KEY_DELIVERY=env` is an explicit demo-only opt-in: console key delivery uses an ACA secret, never browser code. Hosted-agent key delivery remains documented [below](#key-delivery-and-the-postdeploy-hook).
+These grants belong to the **console backend managed identity**, not the signed-in browser user or the hosted agents' instance identities. They remain the default workload paths; optional user OBO is a separate explicit S2 operation using B's confidential credential, not MI or the Easy Auth ID token. `AIGW_KEY_DELIVERY=env` is an explicit demo-only opt-in: console key delivery uses an ACA secret, never browser code. Hosted-agent key delivery remains documented [below](#key-delivery-and-the-postdeploy-hook).
 
 If Key Vault public access is disabled while the ACA environment has no VNet integration, the console cannot read the tier key even with **Key Vault Secrets User**. For an explicitly approved disposable demo, set `AIGW_KEY_DELIVERY=env` before provisioning. Provisioning stores the tier key as the console's `aigw-runtime-key` ACA secret and binds `AIGW_RUNTIME_KEY` with a secret reference; changing only the local azd setting does not update an already running console. The runtime key also resides in the gitignored local azd environment, so keep that state private. This does not open Key Vault public access or change APIM authentication.
 
 ### Console secret expiry, rotation and cleanup
 
-An expired console Entra app credential breaks sign-in. After verifying tenant/subscription and the intended azd environment, clear the local value so provisioning appends a replacement credential:
+An expired console Entra app credential breaks sign-in and B's OBO exchange. Generated console/sign-in credentials have a **one-year lifetime**; track expiry and rotate both B (`DEMO_CONSOLE_CLIENT_SECRET`) and optional A (`DEMO_OBO_CLIENT_SECRET`). After verifying tenant/subscription and the intended azd environment, the **new/reconciled-environment** B rotation recipe is:
 
 ```powershell
 azd env set DEMO_CONSOLE_CLIENT_SECRET ""
@@ -78,13 +122,28 @@ azd deploy demo-console
 
 The hook creates an **appended** credential rather than deleting all app credentials; verify sign-in with the new one, then manually remove obsolete/expired credentials in Entra. Never paste the generated value into documentation or terminal transcripts.
 
-`azd down` deletes Azure resources, **not** the console Entra app or its credentials. Delete the console app/credentials manually in the intended tenant when retiring the demo (and handle the gateway app separately). Treat any retained gitignored azd state as secret-bearing.
+For A, clear only its local secret value and rerun the OBO setup helper to append a replacement, then update the live `obo-signin-secret` reference without exposing its value. For the current drifted environment, use scoped credential/runtime updates instead of the full-provision recipe above; preserve `entra-client-secret` for B's existing Easy Auth contract. Verify both sign-in and the OBO exchange before deleting old credentials.
+
+`azd down` deletes Azure resources, **not** Entra app registrations or their credentials. Manually retire A, B and the gateway app/credentials when no longer needed; also remove demo-only scopes/preauthorizations from any retained apps without deleting unrelated permissions. Treat retained ignored azd state as secret-bearing.
 
 ### Updating only the workbook
 
-The workbook is an Azure resource, separate from the console image and query pack. Rebuilding the console does not update its saved layout or queries. After the [tenant/subscription gate](#phase-0---authenticate-to-the-right-tenant), deploy `infra/modules/workbook.bicep` incrementally to the existing resource group, reusing the workbook's **location, display name, tags and workspace resource ID**. Its resource name is derived from the resource group and display name, so changing that name creates a different workbook instead of updating the intended one.
+The workbook is an Azure resource, separate from the console image and query pack. Rebuilding the console does not update its saved layout or queries. After the [tenant/subscription gate](#phase-0---authenticate-to-the-right-tenant), deploy `infra/modules/workbook.bicep` incrementally to the existing resource group, reusing the workbook's **location, display name, tags and workspace resource ID**. Also supply `aigwPrincipalId` from the tier's live managed-identity principal/object ID for **Foundry-observed** token attribution; blank means unavailable, not all callers. Its resource name is derived from the resource group and display name, so changing that name creates a different workbook instead of updating the intended one.
 
 A workbook-only deployment does not require redeploying the console, tool backends or hosted agents. Use the [monitoring contract](./09-monitoring-and-audit.md#workbook) and [visual acceptance checks](./04-testing.md#workbook-visual-acceptance) for the global time range, trace scope and scalar token-chart columns. Reload the saved workbook from `WORKBOOK_ID`; an unsaved portal editing session can still contain older JSON.
+
+For the same token-source correction in the query pack, deploy `infra/modules/querypack.bicep` with that `aigwPrincipalId` and the existing pack name/location/tags. The supported full provisioning path binds both modules and outputs `AIGW_PRINCIPAL_ID` automatically; `postprovision` maps it to `aigwPrincipalId` in the ignored IDs file. Console S5 also needs the new query bundle/application image and `AIGW_PRINCIPAL_ID` environment value. No agent redeployment or route change is needed.
+
+### Updating only the console guide and workbook link
+
+After [Phase 0](#phase-0---authenticate-to-the-right-tenant), a narrow GUI update has **two** requirements:
+
+1. Set the existing console Container App's **runtime `WORKBOOK_ID` environment variable** to the existing workbook resource ID (the `WORKBOOK_ID` azd output), preserving its other settings, secrets and auth boundary. A local `azd env set WORKBOOK_ID ...` alone does **not** update the running app. Full `azd provision` wires this existing output to console Settings automatically, but is not required solely to deploy the new image when runtime configuration has been updated separately.
+2. Deploy the new console image with `azd deploy demo-console`. It bundles the maintained reference PNG served behind authentication at `/reference/architecture.png` and the collapsed eight-item presenter guide around the existing five workflows. An image-only deploy does not independently supply a missing runtime `WORKBOOK_ID`.
+
+S5 shows an optional workbook link when configured, and unavailable/missing configuration otherwise; it does not create or validate a workbook. Updating the actual workbook/query pack is the separate operation above. The GUI also adds readable source-derived query labels, a configuration-load action lockout and disabled APIM-only REST/denial controls for the tier. **This guide-only update does not require hosted-agent deployment, a route change or OBO setup**; opt-in S2 OBO has the separate setup above. No customer backend or production-security acceptance is implied.
+
+Check the [browser acceptance list](./04-testing.md#browser-console-acceptance-checks) after deployment; a local fixture pass is not a real Entra/browser acceptance pass.
 
 ## At a glance
 
@@ -92,7 +151,7 @@ A workbook-only deployment does not require redeploying the console, tool backen
 |---|---|---|
 | <img src="./assets/icons/azure-devops.svg" width="24" alt=""> | **Tool** | `azd up` with `preprovision` / `postprovision` hooks, plus a per-agent `postdeploy` hook |
 | <img src="./assets/icons/api-management.svg" width="24" alt=""> | **Pass 1** | Agents point at APIM v2 (`AGENT_DEFAULT_GATEWAY=apimv2`, delivered to the agents as `HOSTED_DEFAULT_GATEWAY`) |
-| <img src="./assets/icons/ai-gateway.svg" width="24" alt=""> | **Pass 2** | Flip to `aigateway`, then `azd deploy agent-maf agent-langgraph` |
+| <img src="./assets/icons/ai-gateway.svg" width="24" alt=""> | **Pass 2** | Optional preview comparison: flip to `aigateway`, then `azd deploy agent-maf`, then `azd deploy agent-langgraph` |
 | <img src="./assets/icons/foundry-agent-service.svg" width="24" alt=""> | **Agents** | `agent-maf` and `agent-langgraph` on the official hosts, `host: azure.ai.agent`, `remoteBuild: true` |
 | <img src="./assets/icons/resource-group.svg" width="24" alt=""> | **Cleanup** | `azd down --purge --force` for resources; manually remove Entra apps/credentials. Historical v1.2 teardown took about 36 minutes. |
 
@@ -150,7 +209,7 @@ azd env set AIGW_REQUEST_LIMIT_RPM 120
 azd env set AIGW_RUNTIME_KEY_SECRET_NAME aigw-runtime-key
 azd env set AGENT_DEFAULT_GATEWAY apimv2
 azd env set APIM_SKU StandardV2
-azd env set APIM_PUBLISHER_EMAIL <you@example.com>
+azd env set APIM_PUBLISHER_EMAIL <operator@example.test>
 azd env set APIM_PUBLISHER_NAME "Demo Publisher"
 azd env set MODEL_NAME gpt-5.5
 azd env set MODEL_VERSION 2026-04-24
@@ -169,6 +228,7 @@ azd env set DOMAIN_PROFILE manufacturing-field-ops
 | `APIM_SKU` | `StandardV2` (default) · `PremiumV2` | APIM v2 tier. |
 | `NETWORK_ISOLATION` | `false` (default) · `true` | Adds VNet `10.40.0.0/16`, delegated subnets, 8 private endpoints and 9 private DNS zones. <img src="./assets/badges/static-only.svg" alt="Static only"> |
 | `DEPLOY_AGENT_ON_ACA` | `false` (default) | Optional second runtime on Container Apps. |
+| `ENABLE_DEMO_OBO` | `false` (default) · `true` | Optional console A → B → C user token exchange and catalog-discovery comparison; never hosted-agent delegation. |
 
 Full reference: [12 - Configuration reference](./12-configuration-reference.md).
 
@@ -224,7 +284,8 @@ The hook skips itself when `AIGW_KEY_DELIVERY=env`, when `AI_GATEWAY_MODE=apimv2
 > ```powershell
 > azd env set AIGW_KEY_DELIVERY env
 > azd provision   # postprovision writes the key into the azd env
-> azd deploy agent-maf agent-langgraph
+> azd deploy agent-maf
+> azd deploy agent-langgraph
 > ```
 > That stores the runtime key in **plaintext** in `.azure/<env>/.env` and in the hosted-agent configuration. Never use it outside a disposable demo, and see [05](./05-troubleshooting.md#hosted-agent-gets-forbiddenbyconnection-from-key-vault). In `keyvault` mode the agent also falls back to a non-empty `AIGW_RUNTIME_KEY` when the Key Vault read fails, logging the WARNING `aigw_runtime_key_source`.
 
@@ -241,37 +302,42 @@ python scripts/validate_gateway.py --ids demo-ids.local.json --target aigateway
 - [ ] `aigateway` target reports no failed checks (the model alias in the request must equal the alias name, `chat`).
 
 > [!NOTE]
-> APIM accepts two Entra audiences: the gateway app audience and `https://cognitiveservices.azure.com`, which is the audience used by hosted-agent identities.
+> APIM accepts the gateway app's `api://` URI, its **exact client-ID GUID** (needed for v2 delegated tokens), and `https://cognitiveservices.azure.com`, which is used by hosted-agent identities. This is an explicit audience set, not permission to accept arbitrary applications.
 
 ### Phase 4 - Switch hosted agents to the AI Gateway tier
 
-<img src="./assets/icons/foundry-agent-service.svg" width="20" alt=""> The first `azd up` deploys agents with `AGENT_DEFAULT_GATEWAY=apimv2`. After the AI Gateway tier is validated, run a second pass for the hosted agents only:
+<img src="./assets/icons/foundry-agent-service.svg" width="20" alt=""> The default first `azd up` deploys agents with `AGENT_DEFAULT_GATEWAY=apimv2`. If intentionally changing that route after gateway validation, update the deployed agents and sync the console's provisioning snapshot:
 
 ```powershell
 azd env set AGENT_DEFAULT_GATEWAY aigateway
-azd deploy agent-maf agent-langgraph
+azd provision
+azd deploy agent-maf
+azd deploy agent-langgraph
 ```
 
 To return to the default path:
 
 ```powershell
 azd env set AGENT_DEFAULT_GATEWAY apimv2
-azd deploy agent-maf agent-langgraph
+azd provision
+azd deploy agent-maf
+azd deploy agent-langgraph
 ```
 
 | Pass | `AGENT_DEFAULT_GATEWAY` | Command | Agent auth to gateway |
 |---|---|---|---|
 | <img src="./assets/icons/api-management.svg" width="20" alt=""> **1** | `apimv2` | `azd up` | Entra bearer token (validated by APIM) |
-| <img src="./assets/icons/ai-gateway.svg" width="20" alt=""> **2** | `aigateway` | `azd deploy agent-maf agent-langgraph` | `api-key` runtime key read from Key Vault |
+| <img src="./assets/icons/ai-gateway.svg" width="20" alt=""> **2** | `aigateway` | `azd deploy agent-maf`, then `azd deploy agent-langgraph` | `api-key` runtime key read from Key Vault |
 
 - [ ] Both agents redeployed with the new value.
-- [ ] `scripts/demo_walkthrough.py --gateway aigateway --dry-run` completes (see Final validation).
+- [ ] The console snapshot was synchronized by provisioning; verify the actual route in logs. Its dropdown and the script's `--gateway` argument do not switch agents.
+- [ ] `scripts/demo_walkthrough.py --gateway aigateway --dry-run` prints `PLAN` only (see Final validation), not live route/tool evidence.
 
 ## Gateway phase details
 
 | | Mode | Resources / routes | Validation |
 |---|---|---|---|
-| <img src="./assets/icons/api-management.svg" width="20" alt=""> | `apimv2` | APIM v2, `/llm/openai/v1`, `/catalog-mcp/mcp`, `/records-mcp/mcp`, `/records`, XML policies, diagnostics. | Entra bearer token auth, APIM LLM/MCP logs, tool audit with principal headers. |
+| <img src="./assets/icons/api-management.svg" width="20" alt=""> | `apimv2` | APIM v2, `/llm/openai/v1`, `/catalog-mcp/mcp`, `/records-mcp/mcp`, `/records`, XML policies, diagnostics; MCP routes are HTTP APIs (`apiType=http`) proxying backend adapters. | Actual caller/tool audit + HTTP gateway joins in **01/04**. Native MCP log/query 05 is conditional, not expected from these proxies. |
 | <img src="./assets/icons/ai-gateway.svg" width="20" alt=""> | `aigateway` <img src="./assets/badges/public-preview.svg" alt="Public preview"> | `Microsoft.ApiManagement/service@2025-09-01-preview` (sku `AIGateway`, SystemAssigned identity, about 3 minutes to provision), workspace `default`, model provider + model alias, model endpoint `/default/models/openai/v1`, tool servers, runtime key. | `api-key` auth (401 without a key), Key Vault secret exists, query 11 has `AppRequests` rows after traffic. |
 | <img src="./assets/icons/ai-gateway.svg" width="20" alt=""> <img src="./assets/icons/api-management.svg" width="20" alt=""> | `both` | Both sets. | Validate both with `scripts/validate_gateway.py`; choose the active agent path with `AGENT_DEFAULT_GATEWAY`. |
 
@@ -287,13 +353,13 @@ python scripts/run_audit_queries.py --ids demo-ids.local.json --query 11
 pytest
 ```
 
-- [ ] Walkthrough dry runs complete for both gateways.
-- [ ] Audit query `01` (APIM) returns rows after traffic.
-- [ ] Audit query `11` (AI Gateway tier telemetry in `AppRequests`) returns rows after traffic.
-- [ ] `pytest` has no failures.
+- [ ] Walkthrough dry runs print `PLAN` for both expected gateway labels; neither runs or validates a gateway path.
+- [ ] Inspect query `01`'s actual caller/tool rows after authorized traffic; empty rows are not a pass.
+- [ ] Inspect query `11`'s request and **Foundry-observed** tier token evidence; native export remains unavailable.
+- [ ] Report local failures **and skips**; missing official host packages leave contract checks unverified.
 
 > [!IMPORTANT]
-> Logs and telemetry can lag several minutes behind traffic. Wait and re-run before concluding a query is empty. See [04 - Testing](./04-testing.md) and [05 - Troubleshooting](./05-troubleshooting.md).
+> Logs and telemetry can lag several minutes behind traffic. Wait and rerun bounded queries; empty evidence is not success. Current developer-script S2-S5 are `NOT_RUN`, an incomplete live run exits 2, and only an executed completed S1 Responses payload can pass its protocol check. `--gateway` is an expected-route label, never a deployed routing change. See [04 - Testing](./04-testing.md) and [05 - Troubleshooting](./05-troubleshooting.md).
 
 ## Cleanup
 
@@ -313,4 +379,4 @@ azd down --purge --force
 
 Next: [03b - Manual deployment](./03b-manual-deployment.md) or [04 - Testing](./04-testing.md) →
 
-*Last updated: 2026-10-15*
+*Last updated: 2026-10-20*

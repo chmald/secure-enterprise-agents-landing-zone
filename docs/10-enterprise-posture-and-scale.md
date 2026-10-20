@@ -24,12 +24,23 @@ This document describes the **enterprise posture** of the hosted-agent and dual-
 
 | | Topic | Bottom line |
 |---|---|---|
-| <img src="./assets/icons/virtual-network.svg" width="24" alt=""/> | **Default vs isolated** | Default is public endpoints with Entra auth (demo friendly, live-tested ![live-tested](./assets/badges/live-tested.svg)). `NETWORK_ISOLATION=true` ![static-only](./assets/badges/static-only.svg) adds a VNet `10.40.0.0/16`, delegated subnets, nine private DNS zones, private endpoints and the Foundry standard agent setup. |
+| <img src="./assets/icons/virtual-network.svg" width="24" alt=""/> | **Default vs isolated** | Default is public with **service-specific** authentication (console Entra, APIM JWT, tier runtime key); public tool-backend ingress/trust is a demo limitation. Historical public-path evidence is ![live-tested](./assets/badges/live-tested.svg), not production isolation. `NETWORK_ISOLATION=true` ![static-only](./assets/badges/static-only.svg) adds a VNet `10.40.0.0/16`, delegated subnets, nine private DNS zones, private endpoints and the Foundry standard agent setup. |
 | <img src="./assets/icons/private-endpoint.svg" width="24" alt=""/> | **What is private** | Foundry account, Key Vault, Container Registry (Premium), Cosmos DB, Storage and AI Search get private endpoints with DNS zone groups, and public access is off. APIM v2 and the AI Gateway tier get inbound private endpoints, but their public access stays on until you lock it down (see [known gaps](#known-gaps)). |
 | <img src="./assets/icons/foundry-agent-service.svg" width="24" alt=""/> | **Hosted agent endpoint** | The agent endpoint itself cannot be made private through azd today. |
 | <img src="./assets/icons/api-management.svg" width="24" alt=""/> | **Two gateways, two answers** | Standard v2 and the AI Gateway tier (<img src="./assets/badges/public-preview.svg" alt="Public preview">) have different private-networking options; one setting does not secure both. |
 | <img src="./assets/icons/key-vault.svg" width="24" alt=""/> | **Key Vault under policy** | Hosted agents run outside your VNet, so a subscription policy that turns Key Vault public access off returns `ForbiddenByConnection`. Isolation mode is the proper fix; `AIGW_KEY_DELIVERY=env` is the demo-only escape hatch ([07](./07-identity-auth-traceability.md#key-vault-access-under-network-policy)). |
-| <img src="./assets/icons/azure-devops.svg" width="24" alt=""/> | **Delivery** | No first-party hosted-agent CI/CD exists; the demo ships a do-it-yourself workflow. |
+| <img src="./assets/icons/azure-devops.svg" width="24" alt=""/> | **Delivery** | Console bootstrap requires a human deployer; unattended pipeline integration is not validated by this demo. |
+
+> [!WARNING]
+> **Reference versus live SKU:** the reproducible default targets Standard/Premium v2; current live APIM is **Basic v2**, with azd still configured for **StandardV2**. Public-path/OBO work does not establish the private-network features below. Do not run full `azd provision`, upgrade that SKU or alter the deferred preview lane for this bounded update.
+
+## Delegated identity is not production authorization
+
+The opt-in [console-to-APIM user OBO comparison](./07-identity-auth-traceability.md#console-to-apim-user-obo-three-apps) keeps the existing single-tenant/deployer-only Easy Auth front door. One auxiliary confidential sign-in client obtains an access token for the console API; the console exchanges that token with its own credential for delegated `Gateway.Access`. Tokens/secrets stay server-side. Only the exact form-post OBO callback is excluded from platform login and independently checks browser binding, MSAL state/nonce/PKCE, tenant and the allowed deployer. All other console routes retain Easy Auth and the existing origin/custom-header CSRF controls.
+
+This is a **single-replica demonstration**, not a scalable identity service: flow state is memory-only for 10 minutes, results for 5 minutes, and parent-page polling keeps the console active while sign-in completes. Restart/expiry/cancel/replay fails closed with no MI fallback. Scaling, durable/shared encrypted state, recovery, access reviews and production security require separate design and validation. App registrations and one-year credentials require manual rotation/cleanup; `azd down` does not remove them.
+
+The probe only discovers the catalog MCP schema; it does not call a model, write business data, delegate through a hosted agent or enforce per-user/action/record entitlements. Configuration and acquired-token metadata are not live audit proof: require actual human sign-in plus trace-matched query 01 rows. Business records are synthetic, but real signed-in operator `name`/`username`/`oid` audit fields are privacy-relevant. Do not screen-record or share them unredacted; agree access, retention and redaction before reuse.
 
 ## The network path
 
@@ -166,55 +177,17 @@ Plan capacity from the documented limits, not from the demo's defaults ([network
 
 ## CI/CD is do-it-yourself
 
-![DIY](./assets/badges/diy.svg) <img src="./assets/icons/azure-devops.svg" width="28" alt=""/> There is **no first-party CI/CD** for hosted agents. The demo ships `.github/workflows/deploy.yml`, a manually triggered workflow that signs in with OpenID Connect (no stored secrets) and runs `azd up`. Adapt it to your pipeline system and add approvals, scanning and environment promotion.
+![DIY](./assets/badges/diy.svg) <img src="./assets/icons/azure-devops.svg" width="28" alt=""/> Treat unattended delivery as a **separate design and validation task**, not a working console deployment path supplied by this demo. The current [console bootstrap](./03-deployment.md#demo-console-provisioning-and-sign-in) requires a human Azure CLI deployer, resolves that user's object ID and configures a separate Entra app/credential. A workload-identity/OIDC pipeline cannot simply substitute for that human setup without an explicitly designed bootstrap and approval model.
 
 > [!CAUTION]
-> The workflow is a **starting point**, not a production pipeline: it has no tests, no approval gates, no image scanning and a single environment per run. Use a federated credential with least privilege for the pipeline identity, and keep tenant and subscription explicit.
+> No production pipeline or end-to-end unattended console setup is accepted here. Keep tenant/subscription explicit and use least-privilege workload identity only for separately authorized automation. Do not bypass the human/deployer setup gate to make a pipeline run.
 
-<details><summary><b>Show workflow excerpt</b></summary>
-
-```yaml
-name: Deploy demo
-
-on:
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: azd environment name
-        required: true
-        default: demo
-
-permissions:
-  id-token: write
-  contents: read
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Azure login with OIDC
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Install azd
-        uses: Azure/setup-azd@v2
-
-      - name: Install azd hosted-agent extension
-        run: azd extension install azure.ai.agents
-
-      - name: Provision and deploy
-        run: azd up --no-prompt
-```
-
-The full file also runs `azd env new`/`azd env select` and sets `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_LOCATION`, `AI_GATEWAY_MODE`, `AI_GATEWAY_TIER_LOCATION`, `AIGW_REQUEST_LIMIT_RPM`, `AIGW_RUNTIME_KEY_SECRET_NAME`, `APIM_PUBLISHER_EMAIL`, `APIM_PUBLISHER_NAME` and `GATEWAY_APP_CLIENT_ID` from repository variables before `azd up`.
-
-</details>
+| Delivery concern | Validation needed before a customer pilot |
+|---|---|
+| Bootstrap and identities | Agree who creates/manages the console app, credentials and deployer access; customer owner/approval unknown / to agree. |
+| Build and promotion | Add dependency/contract tests, image scanning, approvals, revision rollback and environment separation. |
+| Isolated deployment | Validate the runner's private DNS, registry, vault and Foundry reachability. |
+| Operations | Agree credential rotation, access review, evidence retention, alert ownership and recovery. Customer assignments/dates unknown / to agree. |
 
 ## Known gaps
 
@@ -229,7 +202,10 @@ The full file also runs `azd env new`/`azd env select` and sets `AZURE_TENANT_ID
 | <img src="./assets/icons/virtual-network.svg" width="24" alt=""/> | Deployment and data-plane operations need in-VNet access | `azd deploy` (registry push), Key Vault and Foundry data-plane calls fail from a public workstation | Run azd from a runner / jump box / VPN in the VNet, or temporarily allow your IP (the post-provision hook prints the steps). |
 | <img src="./assets/icons/virtual-network.svg" width="24" alt=""/> | No Azure Monitor Private Link Scope; the Foundry agent subnet needs a `/24` and a project created after 2026-06-25 for private ACR | Telemetry ingestion stays on public endpoints; older projects cannot pull from the private registry | Add an AMPLS separately; recreate older projects. |
 | <img src="./assets/icons/foundry-agent-service.svg" width="24" alt=""/> | The hosted-agent endpoint cannot be made private with azd | Clients reach the agent over its public endpoint with Entra auth | Front it with a gateway and restrict callers by identity. |
-| <img src="./assets/icons/azure-devops.svg" width="24" alt=""/> | No first-party hosted-agent CI/CD | Delivery is DIY | Use the sample workflow as a template. |
+| <img src="./assets/icons/container-apps.svg" width="24" alt=""/> | Public tool-backend ingress/header trust in the default demo | Gateway sanitization does not prove all backend traffic came through the gateway | Validate controlled backend access, gateway authentication and business authorization before production. |
+| <img src="./assets/icons/policy.svg" width="24" alt=""/> | Coarse APIM JWT/global tool authorization; no implemented APIM content-safety policy | No per-user/action/record entitlement enforcement or APIM `llm-content-safety` proof | Define the customer authorization model and gateway-specific controls; the content-safety setting is wired to preview-tier cards only. |
+| <img src="./assets/icons/entra-id.svg" width="24" alt=""/> | Opt-in console OBO is a memory-only, one-replica catalog-discovery comparison | No hosted-agent user delegation, durable auth workflow, scalable identity service or business authorization | Validate human sign-in and trace-matched audit separately; design production state, credential lifecycle, backend trust and privacy controls. |
+| <img src="./assets/icons/azure-devops.svg" width="24" alt=""/> | Unattended console pipeline integration is unvalidated | Human bootstrap/deployer setup cannot be replaced implicitly by OIDC `azd up` | Design and validate bootstrap, approvals, least privilege and recovery separately. |
 | <img src="./assets/icons/foundry.svg" width="24" alt=""/> | One Foundry project per environment tier | Cross-environment isolation relies on separate azd environments | Keep tiers in separate resource groups. |
 | <img src="./assets/icons/application-insights.svg" width="24" alt=""/> | Cross-system correlation is DIY | Joins rely on `traceparent` and APIM correlation ids | Use the [saved queries](./09-monitoring-and-audit.md#the-saved-queries). |
 | <img src="./assets/icons/foundry-control-plane.svg" width="24" alt=""/> | Agent Optimizer cost estimates cover prompt agents only; exact hosted-agent OpenTelemetry environment variable names are unconfirmed | Cost and telemetry tuning is manual for hosted agents | Re-check the Learn pages before relying on either. |
@@ -237,12 +213,12 @@ The full file also runs `azd env new`/`azd env select` and sets `AZURE_TENANT_ID
 ## Recommendation
 
 > [!TIP]
-> **Bottom line:** default demos run live on both gateways today. Treat isolation mode as a validated design (what-if only) and a separate deployment track, and run it from inside the VNet.
+> **Bottom line:** both gateways have historical public-path evidence and [limited current checks](./04-testing.md#limited-follow-up-2026-10-20), not a complete current browser/production acceptance pass. Isolation is a separate, what-if-only design/deployment track; validate it from inside the intended network.
 
-Run default demos on APIM Standard v2, add `both` when evaluating the AI Gateway tier, and treat private networking for the tier as a separate validation track. Isolated mode is now a complete private-endpoint landing zone for the data and control plane, but run it from inside the VNet and validate the preview gateway path before relying on it. Keep the hosted-agent, tool, telemetry and audit contracts stable so posture changes do not fork application code.
+Use APIM Standard v2 as the reference lane, add `both` only for an accepted preview comparison, and treat private networking as separate validation. Templates describe a private-endpoint design; they do not prove a complete private data/control plane, backend trust or customer authorization. The hosted-agent endpoint, telemetry ingestion and gateway public-access caveats remain explicit. Use [doc 11's read-only-first pilot scaffold](./11-demo-walkthrough.md#candidate-read-only-first-pilot); customer requirements, owners and approvals are unknown / to agree.
 
 Next: [11 - Demo walkthrough](./11-demo-walkthrough.md) →
 
 ---
 
-*Last updated: 2026-10-15*
+*Last updated: 2026-10-20*

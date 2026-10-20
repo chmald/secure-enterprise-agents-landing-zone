@@ -30,9 +30,9 @@ var llmApiPath = 'llm'
 var apiVersion = '2025-09-01-preview'
 var normalizedFoundryAccountEndpoint = endsWith(foundryAccountEndpoint, '/') ? substring(foundryAccountEndpoint, 0, length(foundryAccountEndpoint) - 1) : foundryAccountEndpoint
 var foundryOpenAiV1BackendUrl = '${normalizedFoundryAccountEndpoint}/openai/v1'
-var llmPolicyXml = replace(replace(replace(replace(loadTextContent('../policies/llm-api-policy.xml'), '{{gateway-audience}}', gatewayAudience), '{{token-limit-tpm-per-agent}}', string(tokenLimitTpmPerAgent)), '{{enable-content-safety}}', string(enableContentSafety)), '{{model-deployment-name}}', modelDeploymentName)
-var mcpPolicyXml = replace(loadTextContent('../policies/mcp-api-policy.xml'), '{{gateway-audience}}', gatewayAudience)
-var recordsPolicyXml = replace(loadTextContent('../policies/records-api-policy.xml'), '{{gateway-audience}}', gatewayAudience)
+var llmPolicyXml = replace(replace(replace(replace(replace(loadTextContent('../policies/llm-api-policy.xml'), '{{gateway-audience}}', gatewayAudience), '{{gateway-client-id}}', gatewayAppClientId), '{{token-limit-tpm-per-agent}}', string(tokenLimitTpmPerAgent)), '{{enable-content-safety}}', string(enableContentSafety)), '{{model-deployment-name}}', modelDeploymentName)
+var mcpPolicyXml = replace(replace(loadTextContent('../policies/mcp-api-policy.xml'), '{{gateway-audience}}', gatewayAudience), '{{gateway-client-id}}', gatewayAppClientId)
+var recordsPolicyXml = replace(replace(loadTextContent('../policies/records-api-policy.xml'), '{{gateway-audience}}', gatewayAudience), '{{gateway-client-id}}', gatewayAppClientId)
 var identityFragmentXml = loadTextContent('../policies/fragments/identity-headers.xml')
 
 resource apim 'Microsoft.ApiManagement/service@2025-09-01-preview' = {

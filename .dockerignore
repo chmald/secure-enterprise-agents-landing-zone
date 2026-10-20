@@ -9,5 +9,8 @@
 !infra/monitoring
 !infra/monitoring/queries
 !infra/monitoring/queries/*.kql
+!docs
+!docs/assets
+!docs/assets/foundry-hosted-agents-ai-gateway-landing-zone-architecture.png
 **/__pycache__
 **/*.pyc

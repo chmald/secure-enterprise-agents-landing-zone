@@ -19,7 +19,10 @@ A symptom-first guide for the failures you are most likely to hit while deployin
 ## Browser demo console
 
 > [!IMPORTANT]
-> The console is deployed with [limited live checks](./04-testing.md#live-follow-up-2026-10-16), not a completed browser acceptance matrix. Do not use the earlier script evidence as proof of console sign-in, RBAC or every workflow.
+> The console is deployed with [limited live checks](./04-testing.md#limited-follow-up-2026-10-20), not a completed browser acceptance matrix. Do not use historical script evidence, a local fixture pass or query execution alone as proof of console sign-in, RBAC, every workflow or the updated GUI deployment.
+
+> [!WARNING]
+> Current live APIM is **Basic v2**, while azd requests **StandardV2**. Do not run the generic full-provision remedies below on that environment without reconciling drift. For this update, preserve SKU/preview and apply only the [scoped OBO/configuration/policy and separate service updates](./03-deployment.md#optional-console-to-apim-user-obo). Check that disposable in-memory records are unchanged before backend restarts.
 
 | Symptom | Check / remedy |
 |---|---|
@@ -34,8 +37,11 @@ A symptom-first guide for the failures you are most likely to hit while deployin
 | Console loads, but browser `POST /api/run` returns `403` without reaching app logs | Easy Auth has its own cookie-based CSRF check before FastAPI. The console auth configuration explicitly includes only its HTTPS `consoleUrl` in `login.allowedExternalRedirectUrls`. Check that value against the browser origin; `azd provision` applies this infrastructure setting, while `azd deploy demo-console` only updates the application. Keep the backend exact-origin/custom-header checks and deployer allowlist; do not disable CSRF or enable wildcard CORS. [Easy Auth CSRF behavior](https://learn.microsoft.com/azure/app-service/overview-authentication-authorization#mitigation-of-cross-site-request-forgery). |
 | Expired console app secret | Clear local `DEMO_CONSOLE_CLIENT_SECRET`, provision to append a new credential, then deploy the console. See [rotation](./03-deployment.md#console-secret-expiry-rotation-and-cleanup). Do not delete all app credentials blindly. |
 | Console URL inaccessible in isolated mode | `NETWORK_ISOLATION=true` uses the internal ACA environment. Browser needs VNet/VPN access and private DNS; signing in does not create network reachability. |
+| All action buttons stay disabled | Actions remain disabled until configuration loads. Check sign-in and the configuration response; configuration failure must not enable actions. Gateway names and the agent-route snapshot are configured context, not live health/readiness. |
+| Session guide / reference image missing | Deploy the updated console image. The collapsed guide contains eight discussion items around the existing S1-S5 workflows; `/reference/architecture.png` is a protected bundled copy of the maintained diagram, not live topology discovery. |
+| S5 workbook link unavailable | `WORKBOOK_ID` must be set on the existing console and the updated image deployed; a local azd value alone does not update the running app. Full provisioning wires the existing output automatically. Missing configuration is intentionally shown, not replaced by a fake link ([03](./03-deployment.md#updating-only-the-console-guide-and-workbook-link)). |
 | Hosted-agent request denied | Check **console managed identity** has **Azure AI User** at the Foundry **project** scope and allow RBAC propagation time. This is not the hosted agent's instance identity. |
-| Authenticated APIM direct check denied | Check console identity's **Cognitive Services User** at Foundry **account** scope and accepted audience `https://cognitiveservices.azure.com`. S2's deliberate no-credential request should still return 401. |
+| Console MI catalog-discovery check denied | Check console identity's **Cognitive Services User** at Foundry **account** scope and accepted audience `https://cognitiveservices.azure.com`. This is the app-only MI card, not the user OBO card. S2's separate no-credential request should still return 401. |
 | Tier key read fails | Check **Key Vault Secrets User** for the console identity, configured secret name and vault network reachability. `AIGW_KEY_DELIVERY=env` is an explicit demo-only opt-in delivered through an ACA secret; never paste the key into the browser. |
 | Log query denied / empty | Check **Log Analytics Reader** at workspace scope. Query 01-11 is last-hour/max-200 bounded; empty data reports `not_run`. Wait for ingestion or generate confirmed demo traffic; query 04 needs a matching trace ID. |
 | Workbook reports missing `DurationMs`, `PromptMessages`, or unset `traceId` | Deploy the corrected workbook, not just the console image. APIM gateway latency is `TotalTime`, while App Insights uses `DurationMs`; LLM messages may be `RequestMessages`/`ResponseMessages`. Workbook panels now bind the maintained saved KQL, and the trace input is optional (blank = recent hops). Reload the saved workbook from `WORKBOOK_ID`; discard an unsaved stale editing session. |
@@ -44,16 +50,41 @@ A symptom-first guide for the failures you are most likely to hit while deployin
 | Time range label changes but the graph still fits only the traffic hours | Filter source events before joins/aggregation, then fill the selected start/end/grain with `make-series`. Expand to typed scalar points for the chart; sparse `summarize` results alone allow the time axis to shrink. Keep the existing `timeContextFromParameter` binding. |
 | Seven-day chart loses early points or totals after flattening | A detail-table `take 200` was applied after point expansion. Limit intermediate **series** before `mv-expand` and retain every bucket; four series at three-hour intervals require **224** points over seven days. |
 | Trace input appears to leave other panels unchanged | Expected: it filters only Trace investigation's timeline and hosted-agent content. The time range applies globally. Console S5 is a separate fixed one-hour query window; it does not inherit workbook parameters. |
+| AI Gateway tokens are absent or zero while model responses report usage | Tier `AppRequests` token counters can be zero despite real usage. The workbook uses **AI Gateway - Foundry-observed**: Foundry `RequestResponse` counters matched to the gateway managed identity. Verify `AIGW_PRINCIPAL_ID` / `aigwPrincipalId`, account diagnostics, model traffic and ingestion delay. A blank binding is unavailable, not zero. Native `llm-request` rows retain null counters to expose the export gap. The direct gateway dropdown does not reroute hosted agents. |
 | Agent answered but expected tool/audit is absent | Response success proves transport/protocol only. An agent may choose another/no tool; a response-header trace ID does not prove propagation. Verify source logs and query 04. |
+| Agent or record selection changes clear confirmation | Expected safeguard: review and confirm the newly selected agent/record operation. A previous confirmation must not silently authorize a different submission. |
 | Changing gateway dropdown did not reroute agent / display differs from logs | Expected: dropdown changes **direct checks only**. Agent routing is deployed `HOSTED_DEFAULT_GATEWAY`; console display is a **provisioning snapshot**, not live discovery. Change `AGENT_DEFAULT_GATEWAY`, reprovision to sync console config, and redeploy agents. Agent-only deploy can leave the snapshot stale. |
 | S1 is green but readiness was not checked | Expected: console S1 invokes Responses only; it does **not** issue a readiness GET. Verify readiness separately if required. |
 | S5 is green but rows do not prove the intended audit claim | Expected: “passed” means a fixed query returned rows. Inspect those rows yourself; it is not an automatically validated audit assertion. |
 | Write button does not run / tool arguments rejected | Confirm the specific direct write or agent submission. Refresh live MCP discovery and inspect its `inputSchema`/JSON args; no writes run automatically. Use disposable data. |
 | Burst has no 429 | `not_run`, not a pass: the bounded 1-120 calls, concurrency ≤8, did not observe throttling. Inspect the selected gateway's response/logs; do not attribute policy origin from a 429 alone. |
-| REST / denied-tool / OBO / ACA comparison unavailable | Direct REST and denied-tool probe are APIM-only; tier parity is not implemented. OBO and optional ACA agent comparison are manual/unavailable unless explicitly deployed. Do not replace them with fake results. |
-| Console app remains after `azd down` | Expected: Entra apps/credentials are not resource-group resources. Manually clean up the console app/credentials in the intended tenant and retire secret-bearing local azd state. |
+| REST / denied-tool / user OBO / ACA comparison unavailable | Direct REST, denied-tool probe and user OBO are APIM-only; preview parity is not implemented. User OBO additionally requires its opt-in setup below. The optional ACA agent comparison remains a separate/manual deployment. Do not replace unavailable paths with fake results. |
+| Guessed record ID returns 404 | List records first and use an actual returned identifier. An unknown item does not establish a REST/MCP routing failure. |
+| Content-safety setting did not add an APIM policy | Expected: `ENABLE_CONTENT_SAFETY` is wired to preview-tier policy cards, not an implemented APIM `llm-content-safety` policy. Query 09/error text/backend 403s are investigation signals, not proof of APIM enforcement. |
+| Developer script reports PLAN / NOT_RUN or exits 2 | Dry-run prints `PLAN`; unimplemented S2-S5 report `NOT_RUN`, and an incomplete live run exits 2. Only an actually completed S1 Responses payload can pass. `--gateway` labels an expected route and never reconfigures agents. Use separately authorized gateway/query checks for other evidence. |
+| Console/sign-in apps remain after `azd down` | Expected: Entra apps/credentials are not resource-group resources. Manually clean up A/B and gateway app/credentials/scopes/preauthorizations as appropriate in the intended tenant; preserve unrelated permissions and retire secret-bearing local azd state. |
 
-Keep tokens, keys, credentials, cookies and populated azd environment values out of screenshots, issue text and escalation logs. Inspect only redacted details when sharing failures.
+Keep tokens, keys, credentials, authorization codes, cookies and populated azd environment values out of screenshots, issue text and escalation logs. Business data is synthetic, but actual operator names/usernames/object IDs in audit are privacy-relevant: do not screen-record or share unredacted rows.
+
+### Console user OBO (separate from MI and hosted-agent checks)
+
+Use [the three-app setup](./03-deployment.md#optional-console-to-apim-user-obo). A is the auxiliary sign-in client, B the existing console API/Easy Auth app, and C the gateway API. S2 has four independent cards; success on MI discovery or S1/S5's hosted-agent identity is not a user OBO success.
+
+| Symptom | Check / remedy |
+|---|---|
+| OBO disabled / not configured | `ENABLE_DEMO_OBO` defaults to `false`. Check live `DEMO_OBO_CLIENT_ID`, A's `obo-signin-secret` reference, existing B `DEMO_CONSOLE_CLIENT_ID` / `entra-client-secret`, and `GATEWAY_APP_CLIENT_ID` without printing values. Local azd settings do not update runtime by themselves. |
+| Entra redirect mismatch / callback loops into Easy Auth | A's exact HTTPS web redirect is `/api/identity/obo/callback`, distinct from B's Easy Auth callback. After provisioning the URL, run the helper with `--environment <ENV_NAME> --apply --redirect-only`. OBO uses **`form_post`**, not a query-string callback. Exclude only the exact OBO callback from platform login; never broaden anonymous console access or disable normal CSRF/deployer checks. |
+| Callback rejected with 401 / missing state cookie | Expected for a direct external callback without the Secure/HttpOnly/SameSite=None `__Host-` browser-binding cookie and matching server-side MSAL flow. Start again from the protected S2 control in the same browser. Do not replay the code, copy callback URLs or bypass state/nonce/PKCE checks. |
+| Callback tenant or user mismatch | Only the configured tenant and exact deploying human are accepted before exchange/probe. Use the deployer; another same-tenant user is not authorized. Keep this restriction even though the callback is outside platform login. |
+| Invalid assertion / token audience error | A must obtain a user **access token for B**, scope `api://<B>/Console.Access`. B exchanges it using **B's own credential**, not A's. Never substitute an Easy Auth ID token, browser header, or token requested by B for itself as the OBO assertion. |
+| Missing scope / preauthorization reference rejected | Persist B/C's exposed scopes before writing A → B `Console.Access` / B → C `Gateway.Access` preauthorization references. The helper merges unrelated permissions and operates only on operator-owned single-tenant apps. Do not replace full permission lists or add tenant-wide Graph consent grants. |
+| Consent / grant / Conditional Access error | Surface the actual error and resolve the narrow required app/scope grant with the tenant operator. No silent MI fallback, broad consent grant or claim of success is allowed. Cancelled sign-in is not a probe pass. |
+| Flow expires / parent poll has no result | Flow TTL is 10 minutes, result TTL 5 minutes, held only in one console replica's memory. Keep the parent console open; protected polling keeps it active. Restart/scale-to-zero, expiry, cancellation or replay fails closed. Start a fresh flow; never recover by replaying codes or switching to MI. |
+| Confidential-client credential expired | Track the one-year A/B credentials. Rotate the affected credential, update only its intended secret reference, verify sign-in/exchange, then remove obsolete credentials. Follow [rotation](./03-deployment.md#console-secret-expiry-rotation-and-cleanup); do not full-provision the current drifted environment. |
+| APIM rejects a successfully acquired delegated token | v2 token `aud` can be C's **exact client-ID GUID**, not its `api://` URI. APIM accepts that GUID plus the original gateway URI and Cognitive Services audience; deploy the narrow policy audience/identity-fragment update, not a wildcard audience or SKU change. |
+| Human name/username missing | Display claims are optional. APIM stamps `x-gw-user-name`, `x-gw-user-username` and `x-gw-delegated-scopes` only from validated delegated claims. Inspect authoritative `human_oid`; never invent a display identity or infer it from browser input. |
+| S2 shows acquired-token metadata but audit is absent | That metadata is **not audit proof**. Use **“Read this identity call's audit”**, which filters source query 01 by the probe trace ID. Wait for ingestion and inspect `identity_type`, human fields, scopes and caller. Empty results remain missing evidence, not success. |
+| `agent_appid` / `agent_oid` looks like a console/user, not an agent | Query 01 retains historical field names for generic caller attribution. B is the calling application in console OBO; the delegated token's `oid` identifies the human, not an independent agent actor. Hosted-agent calls remain app-only; use their own S1/S5 traces. |
 
 ## Decision tree
 
@@ -67,7 +98,7 @@ Keep tokens, keys, credentials, cookies and populated azd environment values out
 |---|---|---|---|
 | <img src="./assets/icons/ai-gateway.svg" width="20" alt="AI Gateway"/> **AI Gateway tier** <img src="./assets/badges/public-preview.svg" alt="Public preview"> | Provisioning fails with `NoAvailableScaleGroups`, `InvalidResourceType` or a missing sku | The subscription is not registered for the `AIGatewayPreview` feature, or the region is wrong | Run the [feature registration](./02-prerequisites.md#register-the-ai-gateway-preview-feature) and re-register the provider; use `eastus2` or `swedencentral` |
 | <img src="./assets/icons/ai-gateway.svg" width="20" alt="AI Gateway"/> **AI Gateway tier** | Provisioning fails with "region not allowed" | The AI Gateway tier is public preview in **East US 2 and Sweden Central only** | Set `AI_GATEWAY_TIER_LOCATION` to `eastus2` or `swedencentral`; keep the rest of the landing zone wherever you like |
-| <img src="./assets/icons/api-management.svg" width="20" alt="API Management"/> **APIM v2** | 401 from the gateway | Token audience is wrong, or the token is missing | Request a token for `api://<GATEWAY_APP_CLIENT_ID>` (or `https://cognitiveservices.azure.com`, both are accepted) |
+| <img src="./assets/icons/api-management.svg" width="20" alt="API Management"/> **APIM v2** | 401 from the gateway | Token audience is wrong, or the token is missing | Accepted audiences are the gateway `api://` URI, its exact client-ID GUID (v2 token `aud`), and `https://cognitiveservices.azure.com`. User OBO requests delegated `Gateway.Access`; MI paths remain unchanged. |
 | <img src="./assets/icons/ai-gateway.svg" width="20" alt="AI Gateway"/> **AI Gateway tier** | 401 from the gateway | `api-key` missing, wrong, or revoked | Re-read the runtime key from Key Vault; check `keyVaultUri` and `AIGW_RUNTIME_KEY_SECRET_NAME` |
 | <img src="./assets/icons/foundry-models.svg" width="20" alt="Foundry Models"/> **Foundry Models** | 404 "unknown model" / deployment not found | `MODEL_DEPLOYMENT_NAME` does not match the deployed model name | Align the variable with the deployment name (the demo targets `gpt-5.5` GlobalStandard) |
 | <img src="./assets/icons/foundry-agent-service.svg" width="20" alt="Foundry Agent Service"/> **Hosted agents** | Error mentioning protocol `1.0.0` | Agent declared the old protocol | Use `responses` protocol version `2.0.0` in the agent manifest and `azure.yaml` |
@@ -82,12 +113,12 @@ Keep tokens, keys, credentials, cookies and populated azd environment values out
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| 401 on `/llm/openai/v1/...` | `validate-azure-ad-token` rejected the token (audience, issuer, expired) | Decode the token (`aud`, `iss`, `exp`) and compare with the policy's accepted audiences; both `{{gateway-audience}}` and `https://cognitiveservices.azure.com` are accepted |
+| 401 on `/llm/openai/v1/...` | `validate-azure-ad-token` rejected the token (audience, issuer, expired) | Inspect safe server-side claim metadata (`aud`, `iss`, `exp`), not a raw token in browser/log output. The exact gateway client-ID GUID, `{{gateway-audience}}` URI and `https://cognitiveservices.azure.com` are accepted. |
 | 403 JSON-RPC `-32601` from an MCP path | Tool name not in the MCP policy allow-list | Add the tool to the allow-list in `infra/policies/mcp-api-policy.xml` (see [doc 08](./08-tools-apim-mcp-topology.md)) |
 | 429 with `Retry-After` | `llm-token-limit` (`TOKEN_LIMIT_TPM_PER_AGENT`, default 20000) or MCP rate limit (120 calls per 60 s per validated `azp`) | Expected under load; raise the named value or reduce concurrency |
 | 413 on MCP call | Payload guard in the hardened MCP policy | Send a smaller request body |
 | Tool response missing or truncated | A policy touched `context.Response.Body` | Remove it. MCP policies must be **inbound-only**; reading the response body breaks streaming. See [Microsoft Learn: MCP server overview](https://learn.microsoft.com/en-us/azure/api-management/mcp-server-overview) |
-| Tool backend sees no human identity | Caller used `client_credentials` (no `scp`), so `x-gw-user-oid` is intentionally empty | Expected for autonomous agents; see [doc 07](./07-identity-auth-traceability.md) |
+| Tool backend sees no human identity | Caller used an app-only token (no `scp`), so human headers are intentionally empty | Expected for console MI and hosted-agent instance identities. Only the separately configured S2 user OBO path demonstrates delegation; see [doc 07](./07-identity-auth-traceability.md). |
 
 > [!WARNING]
 > Client-supplied `x-gw-*` headers are deleted by the identity-headers fragment before gateway-derived values are set. If you see forged identity in audit logs, the fragment is not included on that API.
@@ -104,7 +135,7 @@ The tier is preview with no SLA, restricted to East US 2 and Sweden Central. It 
 | Tool server returns a URL error | The OpenAPI tool server has no absolute `servers[0].url` | Bicep injects it; keep the OpenAPI document's server URL absolute |
 | 401 with a runtime key | Key copied from another gateway, or regenerated | The key is **gateway-scoped**. Re-create it and store it in the Key Vault secret `aigw-runtime-key` |
 | Runtime key not in Key Vault | `postprovision` could not read the key (strict mode or `listSecrets` parse, fixed in v1.2) | Re-run `azd provision`, or create a key named `agents` in the portal at `https://ai.gateway.azure.com` and store it in Key Vault |
-| Query 11 or the portal shows no LLM log rows | The tier does not write `ApiManagementGatewayLlmLog` | Query `AppRequests` (`AppRoleName` `aigw-<name> East US 2`; tokens in `Measurements`); MCP calls are also in `ApiManagementGatewayMCPLog` |
+| Query 11 or the portal shows no LLM log rows | The tier does not write `ApiManagementGatewayLlmLog` | Use `AppRequests` for tier requests and MCP logs for tools. Current verified token counts are **Foundry-observed** `RequestResponse` counters matched to the tier MI object ID; native request-log counters/metric export remain unavailable ([09](./09-monitoring-and-audit.md#ai-gateway-tier-telemetry-preview)). |
 | Model call returns backend auth error | Backend auth (None / API key / OAuth2 / Managed identity) misconfigured, or the managed identity lacks the Foundry User role | Fix the backend credential; grant the gateway's managed identity the Foundry User role on the Foundry resource |
 | Tool backend audit shows `agent_principal: null` | By design: the tier authenticates a runtime key, not an Entra principal | Read `caller` (`aigw-runtime-key:agents`) and `gateway` (`aigateway`) instead |
 
@@ -158,7 +189,7 @@ Hosted agents run the official hosts (no fallback server). Hosted agents are GA;
 |---|---|---|
 | **1** | Confirm the role: `az role assignment list --scope <KEY_VAULT_ID> --assignee <instance principal id>` | Rules out a plain RBAC gap. The `postdeploy` hook is not live-verified, so grant manually if it shows `NOT FOUND` or `FAILED`. |
 | **2** | **Proper fix:** `azd env set NETWORK_ISOLATION true`, then `azd provision` and `azd deploy` | Adds a Key Vault private endpoint and agent subnet injection. ![static-only](./assets/badges/static-only.svg) what-if validated only; you also need in-VNet access for `azd deploy` and the Key Vault data plane. |
-| **3** | **Demo-only compromise:** `azd env set AIGW_KEY_DELIVERY env`, then `azd provision` and `azd deploy agent-maf agent-langgraph` | The runtime key is stored in **plaintext** in `.azure/<env>/.env` and the agent configuration. The agent logs the WARNING `aigw_runtime_key_source source=env`. |
+| **3** | **Demo-only compromise:** `azd env set AIGW_KEY_DELIVERY env`, then approved `azd provision`, `azd deploy agent-maf`, and `azd deploy agent-langgraph` | The runtime key is stored in **plaintext** in `.azure/<env>/.env` and the agent configuration. The agent logs the WARNING `aigw_runtime_key_source source=env`. This is not part of the current APIM-only update. |
 
 > [!WARNING]
 > Option 3 trades security for convenience. Use it only in a disposable demo environment and rotate the AI Gateway runtime key afterwards. In `keyvault` mode the agent also falls back to a non-empty `AIGW_RUNTIME_KEY` when the Key Vault read fails, so a stale value in the environment can mask this problem.
@@ -168,7 +199,7 @@ Hosted agents run the official hosts (no fallback server). Hosted agents are GA;
 | Symptom | Cause | Fix |
 |---|---|---|
 | `AADSTS` audience error | Requested scope does not match the gateway app | Use `api://<GATEWAY_APP_CLIENT_ID>/.default` |
-| No human identity on tool calls | Autonomous (client_credentials) flow | Use OBO via `samples/obo-client/invoke_as_user.py --agent maf\|langgraph` for user-attributed calls |
+| No human identity on tool calls | App-only console MI / hosted-agent flow | Expected for those principals. For a bounded delegated comparison, configure the explicit **console-to-APIM S2 user OBO** operation. `samples/obo-client/invoke_as_user.py` only signs a user into Foundry and has no downstream OBO exchange. |
 | Cannot find agent sign-ins | They are an `agentSignIn` attribute on existing sign-in logs, not a new table | See [Agent sign-in and audit logs](https://learn.microsoft.com/en-us/entra/agent-id/sign-in-audit-logs-agents) |
 | Agent identity limit worry | The 250-identities limit applies to non-Microsoft platforms using app-only client credentials; Foundry is exempt | See [Agent ID FAQ](https://learn.microsoft.com/en-us/entra/agent-id/faq) |
 
@@ -179,7 +210,7 @@ Hosted agents run the official hosts (no fallback server). Hosted agents are GA;
 | Query 11 empty | No traffic yet, or telemetry lag | Query 11 reads `AppRequests` (tier) and `AppDependencies` (content safety); send traffic and wait a few minutes |
 | Query 04 shows no gateway rows for a trace id | Gateway log rows carry no trace id | Expected; join on time and caller, or use the `AppRequests` rows |
 | Query 09 error `ErrorMessage` not found | `ApiManagementGatewayLogs` has no `ErrorMessage` column | Use `LastErrorMessage` and `LastErrorReason` (fixed in v1.2) |
-| No `ApiManagementGatewayMCPLog` rows | Diagnostic category `GatewayMCPLogs` not enabled | Enable categories `GatewayLogs`, `GatewayLlmLogs`, `GatewayMCPLogs` ([monitor MCP servers](https://learn.microsoft.com/en-us/azure/api-management/monitor-mcp-servers)) |
+| No `ApiManagementGatewayMCPLog` / query-05 rows | The sample's APIM catalog/records MCP routes are **HTTP policy proxies (`apiType=http`)**, not native APIM MCP-server resources | Empty native MCP diagnostics can be expected, not broken wiring. Use backend `tool_audit` and `ApiManagementGatewayLogs` joins in **01/04**; keep native 05 conditional, without a fake fallback. For actual native surfaces, separately check category configuration. |
 | Trace id missing in tool audit | Caller did not send `traceparent` | The agents generate one if absent; confirm the gateway preserved it (`exists-action="skip"`) |
 | `run_audit_queries.py` auth error | CLI credential for the wrong tenant | `az login --tenant <TENANT_ID>` and retry |
 
@@ -210,4 +241,4 @@ If you need help, collect these (never include secrets):
 
 Next: [06 - Hosted agents explained](./06-hosted-agents-explained.md) →
 
-*Last updated: 2026-10-15*
+*Last updated: 2026-10-20*

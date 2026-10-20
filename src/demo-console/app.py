@@ -10,10 +10,11 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import parse_qsl, quote
 
 import httpx
 from azure.core.exceptions import AzureError
@@ -21,13 +22,33 @@ from azure.identity import ManagedIdentityCredential
 from azure.keyvault.secrets import SecretClient
 from azure.monitor.query import LogsQueryClient, LogsQueryStatus
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
+from identity import COOKIE_NAME, FLOW_TTL, RESULT_TTL, IdentityError, UserObo, token_identity
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 STATIC = Path(__file__).parent / "static"
 LOG = logging.getLogger("demo_console")
+
+
+class OAuthCallbackAccessFilter(logging.Filter):
+    demo_oauth_filter = True
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple) and len(record.args) >= 3 and isinstance(record.args[2], str):
+            if "/api/identity/obo/callback?" in record.args[2]:
+                args = list(record.args)
+                args[2] = args[2].split("?", 1)[0]
+                record.args = tuple(args)
+        return True
+
+
+access_log = logging.getLogger("uvicorn.access")
+if not any(getattr(value, "demo_oauth_filter", False) for value in access_log.filters):
+    access_log.addFilter(OAuthCallbackAccessFilter())
+
 TOOLS = {
     "catalog": {"list_items", "search_items", "get_item", "check_availability", "check_availability_batch"},
     "records": {"list_records", "get_record", "create_record", "update_record"},
@@ -64,13 +85,21 @@ class Settings:
     project: str = ""
     apim: str = ""
     aigateway: str = ""
+    aigw_principal_id: str = ""
     llm_path: str = "llm"
     model: str = "chat"
     workspace: str = ""
+    workbook_id: str = ""
     vault: str = ""
     secret_name: str = "aigw-runtime-key"
     key_delivery: str = "keyvault"
     runtime_key: str = ""
+    enable_obo: bool = False
+    console_client_id: str = ""
+    console_client_secret: str = field(default="", repr=False)
+    obo_client_id: str = ""
+    obo_client_secret: str = field(default="", repr=False)
+    gateway_client_id: str = ""
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -83,13 +112,21 @@ class Settings:
             project=os.environ.get("FOUNDRY_PROJECT_ENDPOINT", "").rstrip("/"),
             apim=os.environ.get("APIM_GATEWAY_URL", "").rstrip("/") if os.environ.get("AI_GATEWAY_MODE", "apimv2") != "aigateway" else "",
             aigateway=os.environ.get("AIGW_GATEWAY_URL", "").rstrip("/"),
+            aigw_principal_id=os.environ.get("AIGW_PRINCIPAL_ID", ""),
             llm_path=os.environ.get("LLM_API_PATH", "llm").strip("/"),
             model=os.environ.get("MODEL_DEPLOYMENT_NAME", "chat"),
             workspace=os.environ.get("LOG_ANALYTICS_CUSTOMER_ID", ""),
+            workbook_id=os.environ.get("WORKBOOK_ID", ""),
             vault=os.environ.get("KEY_VAULT_URI", ""),
             secret_name=os.environ.get("AIGW_RUNTIME_KEY_SECRET_NAME", "aigw-runtime-key"),
             key_delivery=os.environ.get("AIGW_KEY_DELIVERY", "keyvault"),
             runtime_key=os.environ.get("AIGW_RUNTIME_KEY", ""),
+            enable_obo=os.environ.get("ENABLE_DEMO_OBO", "false").lower() == "true",
+            console_client_id=os.environ.get("DEMO_CONSOLE_CLIENT_ID", ""),
+            console_client_secret=os.environ.get("DEMO_CONSOLE_CLIENT_SECRET", ""),
+            obo_client_id=os.environ.get("DEMO_OBO_CLIENT_ID", ""),
+            obo_client_secret=os.environ.get("DEMO_OBO_CLIENT_SECRET", ""),
+            gateway_client_id=os.environ.get("GATEWAY_APP_CLIENT_ID", ""),
         )
 
 
@@ -99,6 +136,14 @@ class Unavailable(Exception):
 
 class ProtocolFailure(Exception):
     pass
+
+
+def audit_query_directory() -> Path:
+    return Path("/queries") if Path("/queries").exists() else ROOT / "infra" / "monitoring" / "queries"
+
+
+def canonical_tool_name(gateway: str, server: str, name: str) -> str:
+    return name.removeprefix(f"{server}_") if gateway == "aigateway" else name
 
 
 def decode_payload(response: httpx.Response, request_id: int | None = None) -> Any:
@@ -151,6 +196,52 @@ class Runner:
         self.settings = settings
         self.credential = credential or ManagedIdentityCredential()
         self.throttle_lock = threading.Lock()
+
+    def identity_probe(self, delegated_token: str | None = None) -> dict[str, Any]:
+        tp = f"00-{uuid.uuid4().hex}-{uuid.uuid4().hex[:16]}-01"
+        mode = "user_obo" if delegated_token is not None else "console_managed_identity"
+        secrets = [delegated_token] if delegated_token else []
+        try:
+            if not self.settings.apim:
+                raise Unavailable("Identity comparison requires the APIM route.")
+            headers = {"traceparent": tp, "Content-Type": "application/json"}
+            headers.update({"Authorization": f"Bearer {delegated_token}"} if delegated_token is not None else self.headers("apimv2", secrets))
+            token = headers["Authorization"].removeprefix("Bearer ")
+            identity = token_identity(token)
+            if delegated_token is not None:
+                if (
+                    identity["kind"] != "delegated_user"
+                    or identity["user_object_id"].casefold() != self.settings.owner.casefold()
+                    or identity["tenant_id"].casefold() != self.settings.tenant.casefold()
+                    or identity["calling_application_id"].casefold() != self.settings.console_client_id.casefold()
+                    or identity["audience"] not in {self.settings.gateway_client_id, f"api://{self.settings.gateway_client_id}"}
+                    or "Gateway.Access" not in identity["delegated_scopes"]
+                ):
+                    raise ProtocolFailure("The OBO token did not match the allowed user, console application and APIM scope. No fallback was used.")
+            elif identity["delegated_scopes"]:
+                raise ProtocolFailure("The application-only comparison unexpectedly acquired a delegated token.")
+            with httpx.Client(timeout=45, follow_redirects=False) as client:
+                self.mcp(client, RunInput(action="mcp-list", gateway="apimv2", server="catalog"), headers)
+            result = {
+                "status": "passed", "identity": identity,
+                "detail": "Read-only APIM catalog MCP discovery succeeded. Identity fields are acquired-token metadata; read the correlated gateway-stamped audit rows for confirmation.",
+                "audit": {"status": "pending", "trace_id": tp.split("-")[1], "query": "01", "detail": "Allow for log ingestion, then read identity audit evidence."},
+            }
+        except (Unavailable, IdentityError) as error:
+            result = {"status": "unavailable", "detail": str(error)}
+        except ProtocolFailure as error:
+            LOG.warning("identity_probe_protocol_failure mode=%s trace_id=%s", mode, tp.split("-")[1])
+            result = {"status": "failed", "detail": str(error)}
+        except (httpx.HTTPError, AzureError) as error:
+            LOG.warning("identity_probe_upstream_failure mode=%s type=%s trace_id=%s", mode, type(error).__name__, tp.split("-")[1])
+            result = {"status": "failed", "detail": f"{type(error).__name__}: the identity comparison could not reach or authenticate to APIM. No identity fallback was used."}
+        result.update(action="identity", identity_mode=mode, trace_id=tp.split("-")[1], traceparent=tp)
+        print(json.dumps({"event": "identity_probe", "identity_mode": mode, "trace_id": tp.split("-")[1], "outcome": result["status"]}), flush=True)
+        encoded = json.dumps(result, default=str)
+        for secret in secrets:
+            if secret:
+                encoded = encoded.replace(secret, "[redacted]")
+        return json.loads(encoded)
 
     def gateway_url(self, gateway: str) -> str:
         url = self.settings.apim if gateway == "apimv2" else self.settings.aigateway
@@ -213,13 +304,24 @@ class Runner:
     def audit(self, data: RunInput) -> dict[str, Any]:
         if not self.settings.workspace:
             raise Unavailable("Log Analytics workspace is not configured.")
-        query_dir = Path("/queries") if Path("/queries").exists() else ROOT / "infra" / "monitoring" / "queries"
-        files = sorted(query_dir.glob(f"{data.query}-*.kql"))
+        files = sorted(audit_query_directory().glob(f"{data.query}-*.kql"))
         if len(files) != 1:
             raise Unavailable("Saved query is missing or ambiguous.")
         query = files[0].read_text(encoding="utf-8")
+        attribution_warning = ""
+        if data.query in {"02", "11"}:
+            if self.settings.aigw_principal_id:
+                try:
+                    principal_id = str(uuid.UUID(self.settings.aigw_principal_id))
+                except ValueError:
+                    raise Unavailable("AIGW_PRINCIPAL_ID must be the gateway managed-identity principal GUID.") from None
+                query = query.replace('let aigwPrincipalId = "";', f'let aigwPrincipalId = "{principal_id}";')
+            elif self.settings.aigateway:
+                attribution_warning = " AI Gateway token attribution is unavailable: AIGW_PRINCIPAL_ID is not configured."
         if data.query == "04" and data.trace_id:
             query = query.replace('traceId:string = ""', f'traceId:string = "{data.trace_id}"')
+        if data.query == "01" and data.trace_id:
+            query += f'\n| where trace_id == "{data.trace_id}"'
         with LogsQueryClient(self.credential) as client:
             response = client.query_workspace(self.settings.workspace, query + "\n| take 200", timespan=timedelta(hours=1))
         if response.status != LogsQueryStatus.SUCCESS:
@@ -228,11 +330,11 @@ class Runner:
         rows = sum(len(table["rows"]) for table in tables)
         return {
             "status": "passed" if rows else "not_run", "query": files[0].name, "tables": tables,
-            "detail": f"{rows} rows returned (last hour, at most 200 per table). Rows require interpretation; no automatic audit assertion." if rows else "No rows yet. Allow for ingestion delay; this is not proof of an audit pass.",
+            "detail": (f"{rows} rows returned (last hour, at most 200 per table). Rows require interpretation; no automatic audit assertion." if rows else "No rows yet. Allow for ingestion delay; this is not proof of an audit pass.") + attribution_warning,
         }
 
     def execute(self, data: RunInput, client: httpx.Client, tp: str, secrets: list[str]) -> dict[str, Any]:
-        canonical_tool = data.tool.removeprefix(f"{data.server}_") if data.gateway == "aigateway" else data.tool
+        canonical_tool = canonical_tool_name(data.gateway, data.server, data.tool)
         mutates = data.action in {"agent", "rest-create", "rest-update", "throttle"} or (
             data.action == "mcp-call" and canonical_tool in {"create_record", "update_record"}
         )
@@ -268,7 +370,14 @@ class Runner:
                 raise HTTPException(400, "Select a supported tool from this server's live tools/list.")
             url, session_headers, tools = self.mcp(client, data, headers)
             if data.action == "mcp-list":
-                return {"status": "passed", "tools": tools, "detail": "MCP initialize, notification and tools/list succeeded. Select a tool to exercise its live input schema."}
+                return {
+                    "status": "passed",
+                    "tools": [
+                        {**tool, "console_supported": canonical_tool_name(data.gateway, data.server, tool["name"]) in TOOLS[data.server]}
+                        for tool in tools
+                    ],
+                    "detail": "MCP initialize, notification and tools/list succeeded. Select a demo-enabled tool to exercise its live input schema; other advertised tools are disabled in this console.",
+                }
             name = "delete_all_records" if data.action == "denied-tool" else data.tool
             if data.action == "mcp-call" and name not in {tool["name"] for tool in tools}:
                 raise HTTPException(400, "Selected tool is not advertised by the live gateway.")
@@ -394,15 +503,17 @@ def authorized(request: Request, settings: Settings) -> bool:
     return authorization_failure(request, settings) is None
 
 
-def create_app(settings: Settings | None = None, runner: Runner | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, runner: Runner | None = None, obo: UserObo | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     app = FastAPI(title="Secure Agents Demo Console", docs_url=None, redoc_url=None, openapi_url=None)
     runner = runner or Runner(settings)
+    obo = obo or UserObo(settings, lambda token: runner.identity_probe(token))
 
     @app.middleware("http")
     async def guard(request: Request, call_next: Any) -> Any:
+        oauth_callback = request.url.path == "/api/identity/obo/callback" and request.method == "POST"
         if request.url.path != "/healthz":
-            auth_reason = authorization_failure(request, settings)
+            auth_reason = None if oauth_callback else authorization_failure(request, settings)
             if auth_reason:
                 LOG.warning("console_access_denied auth_reason=%s", auth_reason)
                 return JSONResponse({
@@ -410,7 +521,7 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
                     "auth_reason": auth_reason,
                 }, status_code=403, headers={"Cache-Control": "no-store"})
             if request.method not in {"GET", "HEAD"}:
-                if request.headers.get("origin") != settings.origin or request.headers.get("x-demo-console") != "1":
+                if not oauth_callback and (request.headers.get("origin") != settings.origin or request.headers.get("x-demo-console") != "1"):
                     return JSONResponse({"detail": "Same-origin console requests only."}, status_code=403)
                 length = request.headers.get("content-length", "0")
                 if not length.isdigit():
@@ -436,6 +547,15 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
     def index() -> FileResponse:
         return FileResponse(STATIC / "index.html")
 
+    @app.get("/reference/architecture.png")
+    def architecture() -> FileResponse:
+        image = Path("/reference/architecture.png")
+        if not image.exists():
+            image = ROOT / "docs" / "assets" / "foundry-hosted-agents-ai-gateway-landing-zone-architecture.png"
+        if not image.is_file():
+            raise HTTPException(503, "The reference architecture image is not bundled in this deployment.")
+        return FileResponse(image, media_type="image/png")
+
     @app.get("/api/config")
     def config() -> dict[str, Any]:
         profile_dir = Path("/config/profiles") if Path("/config/profiles").exists() else ROOT / "config" / "profiles"
@@ -446,12 +566,81 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
             "profile": profile["displayName"], "walkthrough": profile["walkthrough"],
             "gateways": [name for name, url in (("apimv2", settings.apim), ("aigateway", settings.aigateway)) if url],
             "agent_gateway": settings.agent_gateway,
-            "identity": "Console managed identity; not human OBO or a hosted agent principal.",
+            "identity": "Default direct calls use console managed identity. Explicit S2 user OBO is separate from hosted-agent instance identity.",
+            "queries": [
+                {"id": path.name[:2], "label": path.stem.replace("-", " ")}
+                for path in sorted(audit_query_directory().glob("*.kql"))
+                if re.match(r"^(0[1-9]|1[01])-", path.name)
+            ],
+            "workbook_url": f"https://portal.azure.com/#resource{quote(settings.workbook_id, safe='/')}/workbook" if settings.workbook_id else None,
+            "connections": {
+                "foundry_project": bool(settings.project),
+                "audit_workspace": bool(settings.workspace),
+            },
+            "obo": {
+                "available": obo.unavailable_reason is None,
+                "detail": obo.unavailable_reason or "Explicit user sign-in, console access token, genuine OBO exchange and read-only APIM call. Not hosted-agent delegation.",
+            },
         }
 
     @app.post("/api/run")
     def run(data: RunInput) -> dict[str, Any]:
         return runner.run(data)
+
+    @app.post("/api/identity/managed")
+    def managed_identity() -> dict[str, Any]:
+        return runner.identity_probe()
+
+    @app.post("/api/identity/obo/start")
+    def start_obo() -> JSONResponse:
+        try:
+            binding, url = obo.start()
+        except IdentityError as error:
+            raise HTTPException(error.status, str(error)) from None
+        response = JSONResponse({"authorization_url": url})
+        response.set_cookie(COOKIE_NAME, binding, max_age=FLOW_TTL, secure=True, httponly=True, samesite="none", path="/")
+        return response
+
+    @app.post("/api/identity/obo/callback")
+    async def complete_obo(request: Request) -> RedirectResponse:
+        if request.headers.get("content-type", "").split(";", 1)[0].lower() != "application/x-www-form-urlencoded":
+            raise HTTPException(415, "The OAuth callback requires a form-post response.")
+        try:
+            fields = parse_qsl((await request.body()).decode("utf-8"), keep_blank_values=True, max_num_fields=12)
+        except ValueError:
+            raise HTTPException(400, "Invalid OAuth form response.") from None
+        if len({key for key, _ in fields}) != len(fields):
+            raise HTTPException(400, "Repeated OAuth response parameters are not accepted.")
+        binding = request.cookies.get(COOKIE_NAME, "")
+        try:
+            await run_in_threadpool(obo.complete, binding, dict(fields))
+        except IdentityError as error:
+            raise HTTPException(error.status, str(error)) from None
+        response = RedirectResponse("/identity/obo/complete", status_code=303)
+        response.set_cookie(COOKIE_NAME, binding, max_age=RESULT_TTL, secure=True, httponly=True, samesite="none", path="/")
+        return response
+
+    @app.get("/identity/obo/complete")
+    def obo_complete_page() -> FileResponse:
+        return FileResponse(STATIC / "obo-complete.html")
+
+    @app.get("/api/identity/obo/result")
+    def obo_result(request: Request) -> JSONResponse:
+        try:
+            result = obo.take_result(request.cookies.get(COOKIE_NAME, ""))
+        except IdentityError as error:
+            raise HTTPException(error.status, str(error)) from None
+        response = JSONResponse(result)
+        if result["status"] != "not_run":
+            response.delete_cookie(COOKIE_NAME, secure=True, httponly=True, samesite="none", path="/")
+        return response
+
+    @app.post("/api/identity/obo/cancel")
+    def cancel_obo(request: Request) -> JSONResponse:
+        obo.cancel(request.cookies.get(COOKIE_NAME, ""))
+        response = JSONResponse({"status": "not_run", "detail": "Pending user sign-in cancelled; no identity fallback was used."})
+        response.delete_cookie(COOKIE_NAME, secure=True, httponly=True, samesite="none", path="/")
+        return response
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
     return app

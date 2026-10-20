@@ -50,3 +50,30 @@ function Set-DemoConsoleRedirectUri {
     if ($LASTEXITCODE -ne 0) { throw "Failed to configure the console Entra callback URL." }
     Write-Host "Demo console: $url (Entra sign-in, deploying user only)."
 }
+
+function Initialize-DemoOboAuth {
+    param([Parameter(Mandatory = $true)][string]$EnvironmentName)
+    $enabled = Get-EnvValue -Name "ENABLE_DEMO_OBO" -Default "false"
+    Assert-AllowedValue -Name "ENABLE_DEMO_OBO" -Value $enabled -Allowed @("true", "false")
+    if ($enabled -ne "true") { return }
+    if ((Get-EnvValue -Name "AI_GATEWAY_MODE" -Default "apimv2") -eq "aigateway") {
+        throw "ENABLE_DEMO_OBO requires an APIM lane; preview runtime keys cannot represent user delegation."
+    }
+    $script = Join-Path (Get-DemoRoot) "scripts\configure_console_obo.py"
+    & python $script --environment $EnvironmentName --apply
+    if ($LASTEXITCODE -ne 0) { throw "Owned OBO app setup failed; no identity fallback is configured." }
+    foreach ($name in @("DEMO_OBO_CLIENT_ID", "DEMO_OBO_CLIENT_SECRET")) {
+        $value = & azd env get-value $name --environment $EnvironmentName
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace([string]$value)) {
+            throw "OBO setup did not persist required setting $name."
+        }
+        [Environment]::SetEnvironmentVariable($name, ([string]$value).Trim().Trim('"'), "Process")
+    }
+}
+
+function Set-DemoOboRedirectUri {
+    if ((Get-EnvValue -Name "ENABLE_DEMO_OBO" -Default "false") -ne "true") { return }
+    $script = Join-Path (Get-DemoRoot) "scripts\configure_console_obo.py"
+    & python $script --environment (Get-EnvValue -Name "AZURE_ENV_NAME") --apply --redirect-only
+    if ($LASTEXITCODE -ne 0) { throw "Could not configure the exact OBO sign-in callback." }
+}

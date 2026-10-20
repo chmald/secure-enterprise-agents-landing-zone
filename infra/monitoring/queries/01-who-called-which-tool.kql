@@ -1,4 +1,4 @@
-// Question: who (human + agent) called which tool/backend, with tokens, when, and was it allowed? Tables: ContainerAppConsoleLogs_CL, AppTraces, ApiManagementGatewayMCPLog, ApiManagementGatewayLlmLog.
+// Question: who (human subject + calling workload) called which tool/backend, with tokens, when, and was it allowed? Tables: ContainerAppConsoleLogs_CL, AppTraces, ApiManagementGatewayMCPLog, ApiManagementGatewayLlmLog.
 let ToolAudit =
     union isfuzzy=true
         (ContainerAppConsoleLogs_CL | project TimeGenerated, RawLog=tostring(Log_s)),
@@ -14,6 +14,10 @@ let ToolAudit =
         decision = tostring(audit.decision),
         reason = tostring(audit.reason),
         human_oid = tostring(audit.human_principal.oid),
+        human_name = tostring(audit.human_principal.name),
+        human_username = tostring(audit.human_principal.username),
+        identity_type = coalesce(tostring(audit.identity_type), case(isnotempty(tostring(audit.human_principal.oid)), "delegated_user", isnotempty(tostring(audit.agent_principal.oid)), "application", isnotempty(tostring(audit.caller)), "runtime_key", "unattributed")),
+        delegated_scopes = tostring(audit.delegated_scopes),
         agent_appid = tostring(audit.agent_principal.appid),
         agent_oid = tostring(audit.agent_principal.oid),
         gateway = tostring(audit.gateway),
@@ -29,5 +33,5 @@ let Tokens =
 ToolAudit
 | join kind=leftouter GatewayTools on $left.gateway_request_id == $right.CorrelationId
 | join kind=leftouter Tokens on CorrelationId
-| project TimeGenerated, trace_id, gateway_request_id, gateway, caller, human_oid, agent_appid, agent_oid, service, tool=coalesce(tool, ToolName), operation=coalesce(operation, Method), decision, reason, status_code, PromptTokens, CompletionTokens, TotalTokens, ServerName, TransportType
+| project TimeGenerated, trace_id, gateway_request_id, gateway, caller, identity_type, human_oid, human_name, human_username, delegated_scopes, agent_appid, agent_oid, service, tool=coalesce(tool, ToolName), operation=coalesce(operation, Method), decision, reason, status_code, PromptTokens, CompletionTokens, TotalTokens, ServerName, TransportType
 | order by TimeGenerated desc

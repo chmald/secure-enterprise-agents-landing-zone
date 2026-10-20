@@ -2,6 +2,7 @@
 param location string
 param tags object = {}
 param queryPackName string
+param aigwPrincipalId string = ''
 
 resource queryPack 'Microsoft.OperationalInsights/queryPacks@2019-09-01' = {
   name: queryPackName
@@ -73,7 +74,7 @@ resource savedQueries 'Microsoft.OperationalInsights/queryPacks/queries@2019-09-
   name: guid(queryPack.id, query.name)
   properties: {
     displayName: query.displayName
-    body: query.body
+    body: replace(query.body, 'let aigwPrincipalId = "";', 'let aigwPrincipalId = "${aigwPrincipalId}";')
     description: 'Saved query for hosted agents gateway audit demo.'
     related: {
       categories: [

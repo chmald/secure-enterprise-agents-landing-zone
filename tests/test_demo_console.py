@@ -140,6 +140,34 @@ def test_static_ui_and_public_config_never_include_secrets(console, settings):
     assert client.get("/static/app.js", headers=headers()).status_code == 200
 
 
+def test_session_reference_and_query_catalog_are_connected(console, settings):
+    workbook_id = "/subscriptions/test-sub/resourceGroups/demo/providers/Microsoft.Insights/workbooks/test-book"
+    client = TestClient(console.create_app(replace(settings, workbook_id=workbook_id)))
+    config = client.get("/api/config", headers=headers()).json()
+    assert [query["id"] for query in config["queries"]] == [f"{number:02}" for number in range(1, 12)]
+    assert config["queries"][0]["label"] == "01 who called which tool"
+    assert config["workbook_url"] == f"https://portal.azure.com/#resource{workbook_id}/workbook"
+    assert config["connections"]["foundry_project"] and config["connections"]["audit_workspace"]
+    assert client.get("/reference/architecture.png").status_code == 403
+    image = client.get("/reference/architecture.png", headers=headers())
+    assert image.status_code == 200 and image.headers["content-type"] == "image/png"
+    assert image.content.startswith(b"\x89PNG\r\n\x1a\n")
+    assert "secret-test" not in json.dumps(config)
+
+
+def test_missing_workbook_and_reference_are_explicit(console, settings, monkeypatch, tmp_path):
+    client = TestClient(console.create_app(settings))
+    assert client.get("/api/config", headers=headers()).json()["workbook_url"] is None
+    monkeypatch.setattr(console, "ROOT", tmp_path)
+    response = client.get("/reference/architecture.png", headers=headers())
+    assert response.status_code == 503 and "not bundled" in response.json()["detail"]
+
+
+def test_workbook_setting_is_loaded_from_deployment_environment(console, monkeypatch):
+    monkeypatch.setenv("WORKBOOK_ID", "/subscriptions/test-sub/resourceGroups/demo/providers/Microsoft.Insights/workbooks/test-book")
+    assert console.Settings.from_env().workbook_id.endswith("/workbooks/test-book")
+
+
 def test_csrf_and_payload_limit(console, settings):
     client = TestClient(console.create_app(settings))
     assert client.post("/api/run", headers=headers(origin="https://attacker.example"), json={"action": "model"}).status_code == 403
@@ -215,6 +243,18 @@ def test_tier_mcp_names_and_schema(console, settings, monkeypatch):
     result, _ = run(console, settings, monkeypatch, rpc_handler(tools=[{"name": "catalog_check_availability", "inputSchema": {"required": ["item_id"]}}]), action="mcp-list", gateway="aigateway")
     assert result["status"] == "passed"
     assert result["tools"][0]["inputSchema"]["required"] == ["item_id"]
+
+
+def test_discovered_tools_show_console_support_without_hiding_live_schema(console, settings, monkeypatch):
+    tools = [
+        {"name": "records_list_records", "inputSchema": {"type": "object"}},
+        {"name": "records_healthz_healthz_get", "inputSchema": {"type": "object"}},
+    ]
+    result, _ = run(console, settings, monkeypatch, rpc_handler(tools=tools), action="mcp-list", gateway="aigateway", server="records")
+    assert result["status"] == "passed"
+    assert [tool["console_supported"] for tool in result["tools"]] == [True, False]
+    assert result["tools"][1]["inputSchema"] == tools[1]["inputSchema"]
+    assert "other advertised tools are disabled" in result["detail"]
 
 
 def test_mcp_tool_must_be_live_advertised(console, settings, monkeypatch):
@@ -293,6 +333,32 @@ def test_audit_fixed_query_bounds_and_trace(console, settings, monkeypatch, rows
         console.RunInput(action="audit", query="../01")
 
 
+@pytest.mark.parametrize("query_number", ["02", "11"])
+@pytest.mark.parametrize("principal_id", ["", "11111111-2222-3333-4444-555555555555", "invalid-principal"])
+def test_audit_tier_identity_binding(console, settings, monkeypatch, query_number, principal_id):
+    seen = []
+    class Logs:
+        def __init__(self, credential): pass
+        def __enter__(self): return self
+        def __exit__(self, *_): pass
+        def query_workspace(self, workspace, query, timespan):
+            seen.append(query)
+            return SimpleNamespace(status=console.LogsQueryStatus.SUCCESS, tables=[])
+    monkeypatch.setattr(console, "LogsQueryClient", Logs)
+    result = console.Runner(replace(settings, aigw_principal_id=principal_id), Credential()).run(
+        console.RunInput(action="audit", query=query_number)
+    )
+    if principal_id == "invalid-principal":
+        assert result["status"] == "unavailable"
+        assert not seen
+    elif principal_id:
+        assert f'let aigwPrincipalId = "{principal_id}";' in seen[0]
+        assert 'let aigwPrincipalId = "";' not in seen[0]
+    else:
+        assert "attribution is unavailable" in result["detail"]
+        assert 'let aigwPrincipalId = "";' in seen[0]
+
+
 def test_infra_auth_roles_secrets_and_service_wiring():
     module = (ROOT / "infra/modules/demo-console.bicep").read_text()
     assert "defaultAuthorizationPolicy" in module and "allowedUserId" in module
@@ -301,6 +367,8 @@ def test_infra_auth_roles_secrets_and_service_wiring():
     assert "secretRef: 'aigw-runtime-key'" in module
     assert "unauthenticatedClientAction: 'RedirectToLoginPage'" in module
     assert "roleDefinitionId:" in module
+    assert "name: 'WORKBOOK_ID', value: workbookId" in module
+    assert "workbookId: workbook.outputs.workbookId" in (ROOT / "infra/main.bicep").read_text()
     manifest = (ROOT / "azure.yaml").read_text()
     assert "demo-console:" in manifest and "./src/demo-console/Dockerfile" in manifest
     pre = (ROOT / "infra/hooks/preprovision.ps1").read_text()
@@ -309,4 +377,7 @@ def test_infra_auth_roles_secrets_and_service_wiring():
     dockerignore = (ROOT / ".dockerignore").read_text()
     assert dockerignore.startswith("**\n")
     assert "!src/demo-console/**" in dockerignore
+    assert "!docs/assets/foundry-hosted-agents-ai-gateway-landing-zone-architecture.png" in dockerignore
+    assert "!docs/**" not in dockerignore
+    assert "/reference/architecture.png" in (ROOT / "src/demo-console/Dockerfile").read_text()
     assert "!.azure" not in dockerignore and "!demo-ids.local.json" not in dockerignore

@@ -9,6 +9,11 @@ param clientId string
 param allowedUserId string
 @secure()
 param clientSecret string
+param enableDemoObo bool = false
+param oboClientId string = ''
+@secure()
+param oboClientSecret string = ''
+param gatewayAppClientId string = ''
 param domainProfile string
 param agentDefaultGateway string
 param foundryAccountName string
@@ -16,10 +21,12 @@ param foundryProjectName string
 param foundryProjectEndpoint string
 param apimGatewayUrl string
 param aigwGatewayUrl string
+param aigwPrincipalId string = ''
 param aiGatewayMode string
 param modelDeploymentName string
 param workspaceName string
 param workspaceCustomerId string
+param workbookId string = ''
 param keyVaultName string
 param keyVaultUri string
 param runtimeKeySecretName string
@@ -57,7 +64,12 @@ resource console 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'entra-client-secret'
           value: clientSecret
         }
-      ], keyDelivery == 'env' && !empty(runtimeKey) ? [
+      ], enableDemoObo && !empty(oboClientSecret) ? [
+        {
+          name: 'obo-signin-secret'
+          value: oboClientSecret
+        }
+      ] : [], keyDelivery == 'env' && !empty(runtimeKey) ? [
         {
           name: 'aigw-runtime-key'
           value: runtimeKey
@@ -84,17 +96,26 @@ resource console 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'DEMO_CONSOLE_ALLOWED_USER_ID', value: allowedUserId }
             { name: 'DEMO_CONSOLE_URL', value: consoleUrl }
             { name: 'DOMAIN_PROFILE', value: domainProfile }
+            { name: 'ENABLE_DEMO_OBO', value: toLower(string(enableDemoObo)) }
+            { name: 'DEMO_CONSOLE_CLIENT_ID', value: clientId }
+            { name: 'DEMO_OBO_CLIENT_ID', value: oboClientId }
+            { name: 'GATEWAY_APP_CLIENT_ID', value: gatewayAppClientId }
             { name: 'HOSTED_DEFAULT_GATEWAY', value: agentDefaultGateway }
             { name: 'FOUNDRY_PROJECT_ENDPOINT', value: foundryProjectEndpoint }
             { name: 'APIM_GATEWAY_URL', value: apimGatewayUrl }
             { name: 'AIGW_GATEWAY_URL', value: aigwGatewayUrl }
+            { name: 'AIGW_PRINCIPAL_ID', value: aigwPrincipalId }
             { name: 'AI_GATEWAY_MODE', value: aiGatewayMode }
             { name: 'MODEL_DEPLOYMENT_NAME', value: modelDeploymentName }
             { name: 'LOG_ANALYTICS_CUSTOMER_ID', value: workspaceCustomerId }
+            { name: 'WORKBOOK_ID', value: workbookId }
             { name: 'KEY_VAULT_URI', value: keyVaultUri }
             { name: 'AIGW_RUNTIME_KEY_SECRET_NAME', value: runtimeKeySecretName }
             { name: 'AIGW_KEY_DELIVERY', value: keyDelivery }
-          ], keyDelivery == 'env' && !empty(runtimeKey) ? [
+          ], enableDemoObo ? [
+            { name: 'DEMO_CONSOLE_CLIENT_SECRET', secretRef: 'entra-client-secret' }
+            { name: 'DEMO_OBO_CLIENT_SECRET', secretRef: 'obo-signin-secret' }
+          ] : [], keyDelivery == 'env' && !empty(runtimeKey) ? [
             { name: 'AIGW_RUNTIME_KEY', secretRef: 'aigw-runtime-key' }
           ] : [])
         }
@@ -119,6 +140,7 @@ resource auth 'Microsoft.App/containerApps/authConfigs@2024-03-01' = {
       redirectToProvider: 'azureactivedirectory'
       excludedPaths: [
         '/healthz'
+        '/api/identity/obo/callback'
       ]
     }
     identityProviders: {

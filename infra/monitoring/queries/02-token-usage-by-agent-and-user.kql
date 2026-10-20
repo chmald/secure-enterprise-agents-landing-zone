@@ -1,5 +1,7 @@
-// Question: how many LLM tokens were consumed by agent and delegated user? Tables: ApiManagementGatewayLlmLog (Standard v2 APIM), AppRequests (AI Gateway tier built-in App Insights telemetry, AppRoleName "aigw-*"), AppDependencies (hosted-agent GenAI spans), AppTraces.
+// Question: how many LLM tokens were consumed by agent and delegated user? Tables: ApiManagementGatewayLlmLog (Standard v2 APIM), AzureDiagnostics (Foundry-observed tier usage), AppDependencies (hosted-agent GenAI spans), AppTraces.
 // The gateway LLM log carries no agent identity, so per-agent attribution comes from the hosted-agent gen_ai spans (gen_ai.agent.name, gen_ai.usage.*); user_oid is only populated when a delegated user is present (see query 01).
+// Bind the tier's managed-identity principal ID, not its client ID. Blank means tier attribution is unavailable, never all callers.
+let aigwPrincipalId = "";
 let AgentContext =
     AppTraces
     | where Message has "agent_appid" or tostring(Properties.agent_appid) != ""
@@ -8,16 +10,20 @@ let AgentContext =
     | summarize agent_appid=take_any(agent_appid), user_oid=take_any(user_oid) by CorrelationId;
 let ApimLlmLog =
     ApiManagementGatewayLlmLog
-    | summarize PromptTokens=sum(PromptTokens), CompletionTokens=sum(CompletionTokens), Requests=count() by CorrelationId, ModelName
+    | summarize PromptTokens=sum(PromptTokens), CompletionTokens=sum(CompletionTokens), ModelName=take_anyif(ModelName, isnotempty(ModelName)) by ResourceId=tostring(_ResourceId), CorrelationId
     | join kind=leftouter AgentContext on CorrelationId
-    | summarize Requests=sum(Requests), PromptTokens=sum(PromptTokens), CompletionTokens=sum(CompletionTokens) by agent_appid, user_oid, ModelName
+    | summarize Requests=count(), PromptTokens=sum(PromptTokens), CompletionTokens=sum(CompletionTokens) by agent_appid, user_oid, ModelName
     | extend Source="apim-standard-v2-llm-log", agent_name="";
 let TierRequests =
-    AppRequests
-    | where AppRoleName startswith "aigw-" and Name has "/models/"
-    | extend m=todynamic(Measurements)
-    | summarize Requests=count(), PromptTokens=tolong(sum(todouble(m["gen_ai.usage.input_tokens"]))), CompletionTokens=tolong(sum(todouble(m["gen_ai.usage.output_tokens"])))
-    | extend Source="aigateway-tier-app-insights", agent_appid="", agent_name="", user_oid="", ModelName="";
+    AzureDiagnostics
+    | where Category == "RequestResponse" and ResourceProvider =~ "MICROSOFT.COGNITIVESERVICES"
+    | extend p=parse_json(properties_s)
+    | where isnotempty(aigwPrincipalId) and tostring(p.callerObjectId) =~ aigwPrincipalId
+    | project TimeGenerated, BackendResourceId=tostring(_ResourceId), BackendRequestId=CorrelationId, ModelName=tostring(p.modelDeploymentName), PromptTokens=tolong(p.promptTokens), CompletionTokens=tolong(p.completionTokens)
+    | where isnotempty(BackendRequestId) and isnotempty(ModelName) and isnotnull(PromptTokens) and isnotnull(CompletionTokens)
+    | summarize arg_max(TimeGenerated, ModelName, PromptTokens, CompletionTokens) by BackendResourceId, BackendRequestId
+    | summarize Requests=count(), PromptTokens=sum(PromptTokens), CompletionTokens=sum(CompletionTokens) by ModelName
+    | extend Source="aigateway-tier-foundry-observed", agent_appid="", agent_name="", user_oid="";
 let AgentSpans =
     AppDependencies
     | extend p=todynamic(Properties)

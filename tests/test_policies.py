@@ -14,3 +14,14 @@ def test_policy_xml_contracts_when_infra_present():
     assert 'include-fragment fragment-id="identity-headers"' in mcp_text
     assert "x-gw-" in fragment_text.lower()
     assert "context.Response.Body" not in mcp_text
+
+
+def test_user_identity_headers_are_validated_not_client_supplied():
+    fragment = (ROOT / "infra" / "policies" / "fragments" / "identity-headers.xml").read_text()
+    for header in ("x-gw-user-name", "x-gw-user-username", "x-gw-delegated-scopes"):
+        assert f'name="{header}" exists-action="delete"' in fragment
+        assert f'name="{header}" exists-action="override"' in fragment
+    assert "validatedUserOid" in fragment and "preferred_username" in fragment
+    for name in ("llm-api-policy.xml", "mcp-api-policy.xml", "records-api-policy.xml"):
+        policy = (ROOT / "infra" / "policies" / name).read_text()
+        assert "<audience>{{gateway-client-id}}</audience>" in policy

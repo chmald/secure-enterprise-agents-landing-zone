@@ -69,7 +69,7 @@ az account show --query "{tenant:tenantId, subscription:id, subName:name, user:u
 | <img src="./assets/icons/ai-gateway.svg" width="20" alt=""> | **AI Gateway tier** | `https://ai.gateway.azure.com` → Create gateway → supported region → import Foundry model → add MCP/OpenAPI tool servers → create runtime key. | East US 2 or Sweden Central; store the runtime key in Key Vault as `aigw-runtime-key`. |
 | <img src="./assets/icons/container-apps.svg" width="20" alt=""> | **Container Apps** | Deploy `catalog-mcp` and `records-api`. | Use port 8080 for backends. |
 | <img src="./assets/icons/foundry-agent-service.svg" width="20" alt=""> | **Hosted agents** | Prefer `azd deploy agent-maf agent-langgraph` even if infra was manual. | If fully manual, use the hosted-agent manifests under `src/agents/maf` and `src/agents/langgraph`; grant the instance identity Key Vault access yourself (the `postdeploy` hook only runs under azd). |
-| <img src="./assets/icons/code.svg" width="20" alt=""> | **Profiles** | Run `scripts/sync-agent-profiles.ps1` before container builds when root profile JSON changes. | Each hosted-agent Docker context contains a copied `profiles/` folder. |
+| <img src="./assets/icons/code.svg" width="20" alt=""> | **Profiles** | Run `scripts/sync-agent-profiles.ps1` before container builds when canonical root profile JSON changes. | The back-compatible helper name covers **both agent and both tool image contexts**, not agents only. |
 
 ## Portal walkthrough per resource
 
@@ -112,7 +112,7 @@ Each card names the portal blade and the value to enter. Resource naming guidanc
 |---|---|---|
 | 5.1 | **API Management** › Create **Standard v2** (or Premium v2). | - [ ] Instance active |
 | 5.2 | Enable the system-assigned identity and grant it **Foundry User** on the Foundry account. | - [ ] Assignment visible |
-| 5.3 | Create the LLM API (`/llm`), `catalog-mcp`, `records-mcp`, and `records` APIs; paste in `infra/policies/*`. | - [ ] Policies saved |
+| 5.3 | Create the LLM API (`/llm`), `catalog-mcp`, `records-mcp`, and `records` APIs; paste in `infra/policies/*`. The sample MCP resources are **HTTP APIs (`apiType=http`)**, policy-proxying backend adapters, not APIM-managed OpenAPI-generated MCP servers. | - [ ] HTTP proxy policies saved; inspect tool audit / gateway evidence in 01/04, not required native query-05 events |
 | 5.4 | Validate the Entra audience: gateway app audience **and** `https://cognitiveservices.azure.com`. | - [ ] Token test passes |
 | 5.5 | Add diagnostics to Log Analytics (resource-specific). | - [ ] Logs appear after a test call |
 
@@ -182,8 +182,10 @@ python scripts/validate_gateway.py --ids demo-ids.local.json --target aigateway
 python scripts/demo_walkthrough.py --ids demo-ids.local.json --agent both --gateway aigateway --dry-run
 ```
 
+The last command prints **`PLAN`**, not live acceptance; `--gateway` is expected-route labeling only. Current script S2-S5 are `NOT_RUN`, and an incomplete live run exits 2. Use separate authorized gateway/query checks for evidence. Manual infrastructure steps do not reproduce the new console guide/auth/configuration or workbook link; use the supported [console setup and narrow-update path](./03-deployment.md#updating-only-the-console-guide-and-workbook-link) and the [generic eight-item session guide](./11-demo-walkthrough.md#eight-item-customer-session-agenda). All customer-specific requirements, owners and approvals remain unknown / to agree.
+
 ---
 
 Next: [04 - Testing](./04-testing.md) →
 
-*Last updated: 2026-10-15*
+*Last updated: 2026-10-20*

@@ -49,12 +49,12 @@ def _header(headers: Mapping[str, str], name: str) -> str | None:
     return None
 
 
-def gateway_principals(headers: Mapping[str, str]) -> tuple[dict[str, str] | None, dict[str, str | None]]:
+def gateway_principals(headers: Mapping[str, str]) -> tuple[dict[str, str | None] | None, dict[str, str | None]]:
     human_oid = _header(headers, "x-gw-user-oid")
     appid = _header(headers, "x-gw-agent-appid")
     oid = _header(headers, "x-gw-agent-oid")
     actor_facets = _header(headers, "x-gw-actor-facets")
-    human = {"oid": human_oid} if human_oid else None
+    human = {"oid": human_oid, "name": _header(headers, "x-gw-user-name"), "username": _header(headers, "x-gw-user-username")} if human_oid else None
     agent = {"appid": appid, "oid": oid, "actor_facets": actor_facets}
     return human, agent
 
@@ -76,7 +76,8 @@ def build_audit_record(*, service: str, tool: str, operation: str, decision: str
     trace_id, span_id = parse_traceparent(traceparent)
     human, agent = gateway_principals(headers)
     gateway, caller = gateway_context(headers)
-    return {"event":"tool_audit","timestamp":datetime.now(timezone.utc).isoformat(),"trace_id":trace_id,"span_id":span_id,"traceparent":traceparent,"service":service,"tool":tool,"operation":operation,"decision":decision,"reason":reason,"human_principal":human,"agent_principal":agent,"gateway_request_id":_header(headers,"x-gw-request-id"),"gateway":gateway,"caller":caller,"domain_profile":domain_profile,"latency_ms":round(latency_ms,2),"status_code":status_code}
+    identity_type = "delegated_user" if human else "application" if agent["oid"] else "runtime_key" if caller else "unattributed"
+    return {"event":"tool_audit","timestamp":datetime.now(timezone.utc).isoformat(),"trace_id":trace_id,"span_id":span_id,"traceparent":traceparent,"service":service,"tool":tool,"operation":operation,"decision":decision,"reason":reason,"human_principal":human,"agent_principal":agent,"identity_type":identity_type,"delegated_scopes":_header(headers,"x-gw-delegated-scopes") if human else None,"gateway_request_id":_header(headers,"x-gw-request-id"),"gateway":gateway,"caller":caller,"domain_profile":domain_profile,"latency_ms":round(latency_ms,2),"status_code":status_code}
 
 
 def emit_audit_record(record: Mapping[str, Any]) -> None:

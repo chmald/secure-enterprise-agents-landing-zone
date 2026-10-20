@@ -317,6 +317,7 @@ function Write-DemoIdsFile {
         keyVaultUri = Get-EnvValue -Name "KEY_VAULT_URI"
         aigwGatewayName = Get-EnvValue -Name "AIGW_GATEWAY_NAME"
         aigwGatewayUrl = Get-EnvValue -Name "AIGW_GATEWAY_URL"
+        aigwPrincipalId = Get-EnvValue -Name "AIGW_PRINCIPAL_ID"
         aigwLocation = Get-EnvValue -Name "AIGW_LOCATION"
         aigwMcpCatalogUrl = Get-EnvValue -Name "AIGW_MCP_CATALOG_URL"
         aigwMcpRecordsUrl = Get-EnvValue -Name "AIGW_MCP_RECORDS_URL"

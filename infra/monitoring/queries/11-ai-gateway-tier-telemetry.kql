@@ -1,22 +1,36 @@
-// Question: how does AI Gateway tier telemetry compare with Standard v2 APIM LLM logs and the hosted-agent GenAI spans? Tables: AppRequests (AI Gateway tier built-in App Insights telemetry, AppRoleName "aigw-*"; tokens in Measurements gen_ai.usage.*), ApiManagementGatewayMCPLog (AI Gateway tier MCP log), ApiManagementGatewayLlmLog (Standard v2), AppDependencies (hosted-agent gen_ai.* spans).
-// Verified live: the AI Gateway tier writes no ApiManagementGatewayLlmLog rows; its LLM telemetry is the AppRequests row per call.
+// Question: how do gateway requests, Foundry-observed tier tokens and hosted-agent spans compare? Tables: AppRequests, AzureDiagnostics, ApiManagementGatewayMCPLog, ApiManagementGatewayLlmLog, AppDependencies.
+// Tier AppRequests token counters can be zero despite nonzero response usage. Attribute real Foundry RequestResponse counters to the tier's managed identity; never substitute agent totals.
+// Bind the principal ID, not a client ID. Blank means tier token attribution is unavailable. Request and token observation rows overlap and are not additive.
+let aigwPrincipalId = "";
 let Tier =
     AppRequests
     | where AppRoleName startswith "aigw-"
-    | extend m=todynamic(Measurements)
-    | extend Surface=case(Name has "/models/", "llm", Name has "/toolservers/", "mcp", "other")
-    | summarize Requests=count(), Failed=countif(Success == false), InputTokens=tolong(sum(todouble(m["gen_ai.usage.input_tokens"]))), OutputTokens=tolong(sum(todouble(m["gen_ai.usage.output_tokens"]))), AvgDurationMs=avg(DurationMs) by Gateway="aigateway-tier", Surface, Route=Name, TimeGenerated=bin(TimeGenerated, 1h);
+    | extend Surface=case(Name has "/models/", "llm-request", Name has "/toolservers/", "mcp", "other")
+    | summarize Requests=count(), Failed=countif(Success == false), InputTokens=long(null), OutputTokens=long(null), AvgDurationMs=avg(DurationMs) by Gateway="aigateway-tier", Surface, Route=Name, TimeGenerated=bin(TimeGenerated, 1h)
+    | extend TokenSource="not-reported-in-request-log";
+let TierModelUsage =
+    AzureDiagnostics
+    | where Category == "RequestResponse" and ResourceProvider =~ "MICROSOFT.COGNITIVESERVICES"
+    | extend p=parse_json(properties_s)
+    | where isnotempty(aigwPrincipalId) and tostring(p.callerObjectId) =~ aigwPrincipalId
+    | project TimeGenerated, BackendResourceId=tostring(_ResourceId), BackendRequestId=CorrelationId, ModelName=tostring(p.modelDeploymentName), InputTokens=tolong(p.promptTokens), OutputTokens=tolong(p.completionTokens)
+    | where isnotempty(BackendRequestId) and isnotempty(ModelName) and isnotnull(InputTokens) and isnotnull(OutputTokens)
+    | summarize arg_max(TimeGenerated, ModelName, InputTokens, OutputTokens) by BackendResourceId, BackendRequestId
+    | summarize Requests=count(), InputTokens=sum(InputTokens), OutputTokens=sum(OutputTokens) by Gateway="aigateway-tier", Surface="llm", Route=strcat("model=", ModelName), TimeGenerated=bin(TimeGenerated, 1h)
+    | extend Failed=long(null), AvgDurationMs=real(null), TokenSource="Foundry-observed (gateway managed identity)";
 let TierMcp =
     ApiManagementGatewayMCPLog
     | summarize Requests=count(), Failed=countif(isnotempty(Error)), InputTokens=long(null), OutputTokens=long(null), AvgDurationMs=real(null) by Gateway="mcp-resource-log", ResourceId=tostring(_ResourceId), Surface="mcp", Route=strcat(McpServerEndpoint, " ", Method), TimeGenerated=bin(TimeGenerated, 1h);
 let StandardV2 =
     ApiManagementGatewayLlmLog
-    | summarize Requests=count(), Failed=long(0), InputTokens=sum(tolong(PromptTokens)), OutputTokens=sum(tolong(CompletionTokens)), AvgDurationMs=real(null) by Gateway="apim-standard-v2", Surface="llm", Route=strcat("model=", ModelName), TimeGenerated=bin(TimeGenerated, 1h);
+    | summarize TimeGenerated=max(TimeGenerated), ModelName=take_anyif(ModelName, isnotempty(ModelName)), InputTokens=sum(tolong(PromptTokens)), OutputTokens=sum(tolong(CompletionTokens)) by ResourceId=tostring(_ResourceId), CorrelationId
+    | summarize Requests=count(), Failed=long(null), InputTokens=sum(InputTokens), OutputTokens=sum(OutputTokens), AvgDurationMs=real(null) by Gateway="apim-standard-v2", Surface="llm", Route=strcat("model=", ModelName), TimeGenerated=bin(TimeGenerated, 1h)
+    | extend TokenSource="APIM LLM log";
 let AgentSpans =
     AppDependencies
     | extend p=todynamic(Properties)
     | where isnotempty(tostring(p["gen_ai.operation.name"]))
     | summarize Requests=count(), Failed=countif(Success == false), InputTokens=sum(tolong(p["gen_ai.usage.input_tokens"])), OutputTokens=sum(tolong(p["gen_ai.usage.output_tokens"])), AvgDurationMs=avg(DurationMs) by Gateway=strcat("hosted-agent:", AppRoleName), Surface=tostring(p["gen_ai.operation.name"]), Route=tostring(p["gen_ai.request.model"]), TimeGenerated=bin(TimeGenerated, 1h);
-union isfuzzy=true Tier, TierMcp, StandardV2, AgentSpans
-| project TimeGenerated, Gateway, Surface, Route, ResourceId, Requests, Failed, InputTokens, OutputTokens, AvgDurationMs
+union isfuzzy=true Tier, TierModelUsage, TierMcp, StandardV2, AgentSpans
+| project TimeGenerated, Gateway, Surface, Route, ResourceId, Requests, Failed, InputTokens, OutputTokens, AvgDurationMs, TokenSource
 | order by TimeGenerated desc, Gateway asc, Surface asc

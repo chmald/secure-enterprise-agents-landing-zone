@@ -4,6 +4,7 @@
         <validate-azure-ad-token tenant-id="common" output-token-variable-name="validatedToken" failed-validation-httpcode="401" failed-validation-error-message="Missing or invalid gateway token.">
             <audiences>
                 <audience>{{gateway-audience}}</audience>
+                <audience>{{gateway-client-id}}</audience>
                 <audience>https://cognitiveservices.azure.com</audience>
             </audiences>
         </validate-azure-ad-token>

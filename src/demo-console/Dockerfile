@@ -5,6 +5,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY src/demo-console/ /app/
 COPY config/profiles/ /config/profiles/
 COPY infra/monitoring/queries/ /queries/
+COPY docs/assets/foundry-hosted-agents-ai-gateway-landing-zone-architecture.png /reference/architecture.png
 RUN useradd --uid 10001 --create-home console
 USER 10001
 EXPOSE 8080

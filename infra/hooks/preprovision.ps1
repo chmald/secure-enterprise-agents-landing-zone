@@ -36,6 +36,7 @@ if ($network -eq "true") {
 $gatewayClientId = Ensure-GatewayAppRegistration -EnvironmentName $envName
 Write-Host "Gateway application client id: $gatewayClientId"
 Initialize-DemoConsoleAuth -EnvironmentName $envName
+Initialize-DemoOboAuth -EnvironmentName $envName
 
 Invoke-SoftDeletePrompts -EnvironmentName $envName -Location $location
 

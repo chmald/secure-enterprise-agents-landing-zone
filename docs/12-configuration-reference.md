@@ -73,8 +73,13 @@ These azd inputs default blank and are populated by setup, not committed values.
 | `DEMO_CONSOLE_CLIENT_ID` | `demoConsoleClientId` | Blank | Console Entra app client ID; distinct from `GATEWAY_APP_CLIENT_ID`. Hook creates the app when needed. |
 | `DEMO_CONSOLE_ALLOWED_USER_ID` | `demoConsoleAllowedUserId` | Blank | Deploying human's object ID, resolved from the signed-in Azure CLI user; Easy Auth allowlist plus backend `oid` check. |
 | `DEMO_CONSOLE_CLIENT_SECRET` | `demoConsoleClientSecret` (**secure**) | Blank | Generated Entra credential kept in gitignored azd state and an ACA secret; never browser code. Clear locally with `azd env set DEMO_CONSOLE_CLIENT_SECRET ""`, then provision to append a replacement credential and deploy the console. |
+| `ENABLE_DEMO_OBO` | `enableDemoObo` | `false` | Opt in to the explicit console-to-APIM user OBO comparison. Requires the owned-app scopes/client below; never falls back to managed identity. |
+| `DEMO_OBO_CLIENT_ID` | `demoOboClientId` | Blank | Auxiliary single-tenant interactive web client. It obtains a user access token for the console API's `Console.Access` scope; it is not the console API or hosted agent identity. |
+| `DEMO_OBO_CLIENT_SECRET` | `demoOboClientSecret` (**secure**) | Blank | Auxiliary client credential, saved only to ignored azd state and an ACA secret. The console API uses its existing credential for the actual OBO exchange to `Gateway.Access`. No access token or client secret is returned to browser code. |
 
 Tenant validation uses `AZURE_TENANT_ID` / backend `tid`; no multi-tenant/public-user console mode is provided. `postprovision` sets the redirect URI from the deployed endpoint. Entra apps/credentials survive `azd down` and need manual cleanup. Do not share unredacted `azd env get-values` output.
+
+OBO setup is opt-in and owner-scoped: `python scripts/configure_console_obo.py --environment <env> --apply` configures the two API scopes and only their required client preauthorizations; `--apply --redirect-only` updates the auxiliary client's exact callback after first provisioning. It does not provision Azure resources, reconcile an APIM SKU, or grant tenant-wide Graph permissions. Pre/postprovision call it when enabled. Runtime OBO also receives `DEMO_CONSOLE_CLIENT_ID`, `DEMO_CONSOLE_CLIENT_SECRET` and `GATEWAY_APP_CLIENT_ID`; secrets use ACA secret references. The ten-minute, browser-bound sign-in state is memory-only on the single console replica: a restart/expired flow requires a fresh sign-in, not a fallback identity. The exact OAuth form-post callback is excluded from platform login and independently validates the Secure/HttpOnly browser binding, state, PKCE/nonce, tenant and allowed user; all other console routes retain Easy Auth. Authorization codes are not placed in callback URLs. Real interactive sign-in and downstream audit evidence are still required to call the OBO path validated.
 
 The azd service is **`demo-console`**, built remotely with repository-root Docker context; its image uses **Python 3.12**. Its one Container App is **`ca-demo-console`** in the existing ACA environment, with scale-to-zero and **maxReplicas=1**. `NETWORK_ISOLATION=true` makes the environment internal: the browser needs VNet/VPN connectivity and private DNS. `DEPLOY_AGENT_ON_ACA` controls a different, optional agent runtime, not the console.
 
@@ -82,17 +87,21 @@ Console backend managed-identity grants: **Azure AI User** (Foundry project), **
 
 Console limits are fixed application safeguards, not extra deployment knobs: saved KQL **01-11**, **one-hour API timespan**, appended **`take 200`**; throttle **1-120 calls**, **concurrency ≤8**, **dispatch window ≤90 seconds**, **per-request timeout ≤15 seconds** (already-started requests may finish at the deadline). Query **04** accepts a trace ID; `passed` means rows returned, not a validated audit assertion. All agent prompts, direct writes and throttle bursts need explicit confirmation. The direct gateway selector never overrides deployed agent `HOSTED_DEFAULT_GATEWAY`. Console display is a **provisioning snapshot**, not live discovery: reprovision after changing `AGENT_DEFAULT_GATEWAY` to sync it as well as redeploying agents.
 
+The updated GUI retains five S1-S5 tabs and adds a collapsed eight-item discussion/presenter guide with the protected bundled reference image at `/reference/architecture.png`. Action buttons remain disabled until configuration loads; confirmation resets when the selected agent/record operation changes. Saved-query labels are derived from the maintained sources. APIM-only REST/denial controls stay disabled for the tier, including after a request finishes.
+
+`WORKBOOK_ID` is an **existing azd output** and an optional **console runtime environment variable**, not a new workbook resource or agent setting. Full provisioning passes it to console Settings automatically. A narrow console update must set it on the existing app and deploy the new image; setting a local azd value or deploying only the image does not independently update runtime configuration. S5 links to that workbook only when configured, otherwise shows unavailable configuration. See [narrow-update steps](./03-deployment.md#updating-only-the-console-guide-and-workbook-link); no agent redeployment or route change is needed.
+
 ### <img src="./assets/icons/api-management.svg" width="28" alt=""/> Gateway
 
 | Variable | Default | Allowed values | Effect |
 |---|---|---|---|
 | `AI_GATEWAY_MODE` | `apimv2` | `apimv2`, `aigateway`, `both` | Deploy APIM v2 ![GA](./assets/badges/ga.svg), the AI Gateway tier ![Public preview](./assets/badges/public-preview.svg), or both. |
-| `APIM_SKU` | `StandardV2` | `StandardV2`, `PremiumV2` | APIM SKU. |
+| `APIM_SKU` | `StandardV2` | `StandardV2`, `PremiumV2` | Requested provisioning tier, not live discovery. The 2026-10-20 rehearsal found BasicV2 live versus StandardV2 requested; review that drift before provisioning or changing cost/network expectations ([evidence](./04-testing.md#apim-focused-hosted-read-validation-2026-10-20)). |
 | `APIM_PUBLISHER_EMAIL` | `demo@example.com` | Email | APIM publisher email. |
 | `APIM_PUBLISHER_NAME` | `Demo Publisher` | String | APIM publisher name. |
 | `GATEWAY_APP_CLIENT_ID` | Blank | App client ID | Blank lets preprovision create `gw-<env>`. |
 | `TOKEN_LIMIT_TPM_PER_AGENT` | `20000` | Integer | Token-per-minute guard per agent. It does not create model quota. |
-| `ENABLE_CONTENT_SAFETY` | `true` | Boolean | Enables the content-safety control where configured. |
+| `ENABLE_CONTENT_SAFETY` | `true` | Boolean | Wires content-safety **preview-tier policy cards only** in this sample. It does not add an APIM `llm-content-safety` policy or establish enforcement. |
 | `ENABLE_LLM_MESSAGE_LOGGING` | `true` | Boolean | Enables APIM LLM prompt and completion logs. Review the [privacy warning](./09-monitoring-and-audit.md#llm-message-logging-and-privacy) before production. |
 
 ### <img src="./assets/icons/ai-gateway.svg" width="28" alt=""/> AI Gateway tier ![Public preview](./assets/badges/public-preview.svg) ![Live-tested](./assets/badges/live-tested.svg)
@@ -170,6 +179,7 @@ Console limits are fixed application safeguards, not extra deployment knobs: sav
 | <img src="./assets/icons/ai-gateway.svg" width="20" alt=""/> | `AI_GATEWAY_MODE` | `aiGatewayMode` | `apimv2`, `aigateway` or `both`. |
 | <img src="./assets/icons/ai-gateway.svg" width="20" alt=""/> | `AIGW_GATEWAY_NAME` | `aigwGatewayName` | AI Gateway tier name; blank when not deployed. |
 | <img src="./assets/icons/ai-gateway.svg" width="20" alt=""/> | `AIGW_GATEWAY_URL` | `aigwGatewayUrl` | AI Gateway tier base URL. |
+| <img src="./assets/icons/entra-id.svg" width="20" alt=""/> | `AIGW_PRINCIPAL_ID` | `aigwPrincipalId` | Tier managed-identity **principal/object ID**, not client ID. Binds Foundry-observed token attribution in the workbook, query pack, console and CLI. Blank when no tier is deployed; missing binding means unavailable attribution. |
 | <img src="./assets/icons/ai-gateway.svg" width="20" alt=""/> | `AIGW_LOCATION` | `aigwLocation` | AI Gateway tier region. |
 | <img src="./assets/icons/toolbox.svg" width="20" alt=""/> | `AIGW_MCP_CATALOG_URL` | `aigwMcpCatalogUrl` | Catalog MCP tool-server URL on the AI Gateway tier (`.../default/toolservers/catalog-mcp/mcp`). |
 | <img src="./assets/icons/toolbox.svg" width="20" alt=""/> | `AIGW_MCP_RECORDS_URL` | `aigwMcpRecordsUrl` | Records tool-server URL on the AI Gateway tier (OpenAPI exposed as MCP, `.../default/toolservers/records/mcp`). |
@@ -183,7 +193,7 @@ Console limits are fixed application safeguards, not extra deployment knobs: sav
 | <img src="./assets/icons/log-analytics.svg" width="20" alt=""/> | `LOG_ANALYTICS_CUSTOMER_ID` | `logAnalyticsCustomerId` | Workspace customer ID. |
 | <img src="./assets/icons/application-insights.svg" width="20" alt=""/> | `APPLICATIONINSIGHTS_NAME` | `applicationInsightsName` | Application Insights component. |
 | <img src="./assets/icons/application-insights.svg" width="20" alt=""/> | `APPLICATIONINSIGHTS_CONNECTION_STRING` | Not written to IDs file | Secret-like; keep in azd or app settings. |
-| <img src="./assets/icons/workbooks.svg" width="20" alt=""/> | `WORKBOOK_ID` | `workbookId` | Workbook ID. |
+| <img src="./assets/icons/workbooks.svg" width="20" alt=""/> | `WORKBOOK_ID` | `workbookId` | Existing workbook resource ID; also passed to the console for its optional S5 portal link. Missing runtime value leaves that link unavailable. |
 | <img src="./assets/icons/query-pack.svg" width="20" alt=""/> | `QUERY_PACK_ID` | `queryPackId` | Query pack ID. |
 | <img src="./assets/icons/key-vault.svg" width="20" alt=""/> | `KEY_VAULT_NAME` | `keyVaultName` | Key Vault name. |
 | <img src="./assets/icons/key-vault.svg" width="20" alt=""/> | `KEY_VAULT_URI` | `keyVaultUri` | Key Vault URI for runtime secret reads. |
@@ -282,6 +292,8 @@ Names are grouped by the component that reads them. Hosted agents get their valu
 
 <img src="./assets/icons/toolbox.svg" width="28" alt=""/> A profile in `config/profiles/<name>.json` carries everything domain-specific, so retargeting the demo never touches code.
 
+After editing canonical profiles, run `scripts/sync-agent-profiles.ps1` before image builds. Its name is back-compatible; it synchronizes both agents and both tool contexts (**four images**). The quantity-based read-only S3 prompts are synthetic scenario guidance, not a change to business instructions, tools, seed data, authorization or routing.
+
 | Key | Contains |
 |---|---|
 | `profileName`, `displayName` | Identifier and display name. |
@@ -334,4 +346,4 @@ Next: back to the [docs index](./00-reproduce-this-demo.md) →
 
 ---
 
-*Last updated: 2026-10-15*
+*Last updated: 2026-10-20*
